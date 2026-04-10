@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   sdk-verify:
     runs-on: ubuntu-24.04
@@ -15,7 +18,7 @@ jobs:
       JUST_VERSION: "1.40.0"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -38,3 +41,21 @@ jobs:
 
       - name: Verify SDK generation
         run: just sdk-verify
+
+      - name: Package generated SDK bundle
+        run: |
+          mkdir -p dist
+          tar -czf "dist/chat_core-sdk-${{ github.ref_name }}.tar.gz" tmp/cpp tmp/go tmp/dart api/sdk_api.json include
+          ls -la dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat_core-sdk-${{ github.ref_name }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

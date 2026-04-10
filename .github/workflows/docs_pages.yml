@@ -19,7 +19,6 @@ concurrency:
 
 env:
   RUST_VERSION: "1.93.1"
-  JUST_VERSION: "1.40.0"
 
 jobs:
   build:
@@ -27,7 +26,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -35,13 +34,10 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
           components: rustfmt,clippy
 
-      - name: Install just (pinned)
-        run: cargo install --locked just --version "${JUST_VERSION}"
-
       - name: Build docs
         env:
           RUSTDOCFLAGS: -D warnings
-        run: just doc
+        run: cargo doc --workspace --no-deps
 
       - name: Add root index redirect
         run: |

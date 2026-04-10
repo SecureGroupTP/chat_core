@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 env:
   RUST_VERSION: "1.93.1"
   JUST_VERSION: "1.40.0"
@@ -29,7 +32,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -54,9 +57,13 @@ jobs:
       - name: Package artifact
         run: |
           mkdir -p dist
-          find "target/${{ matrix.target }}/release" -maxdepth 1 -type f \
-            \( -name "libchat_core.a" -o -name "chat_core.lib" \) \
-            -exec cp {} dist/ \;
+          release_dir="target/${{ matrix.target }}/release"
+          if [ -f "${release_dir}/libchat_core.a" ]; then
+            cp "${release_dir}/libchat_core.a" "dist/chat_core-${{ matrix.target }}.a"
+          fi
+          if [ -f "${release_dir}/chat_core.lib" ]; then
+            cp "${release_dir}/chat_core.lib" "dist/chat_core-${{ matrix.target }}.lib"
+          fi
           ls -la dist
 
       - name: Upload artifact
@@ -65,6 +72,11 @@ jobs:
           name: chat_core-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
 
   android-cross:
     name: Android (${{ matrix.android_abi }})
@@ -82,7 +94,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -113,7 +125,7 @@ jobs:
       - name: Package artifact
         run: |
           mkdir -p dist
-          find "target/${{ matrix.rust_target }}/release" -maxdepth 1 -type f -name "libchat_core.a" -exec cp {} dist/ \;
+          cp "target/${{ matrix.rust_target }}/release/libchat_core.a" "dist/chat_core-${{ matrix.rust_target }}.a"
           ls -la dist
 
       - name: Upload artifact
@@ -122,3 +134,8 @@ jobs:
           name: chat_core-${{ matrix.rust_target }}
           path: dist/*
           if-no-files-found: error
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
