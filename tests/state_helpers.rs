@@ -51,4 +51,18 @@ fn state_helpers_and_restore_paths() {
     assert!(empty.identity.is_none());
     assert!(empty.groups.is_empty());
     assert!(empty.key_packages.is_empty());
+
+    // Duplicate group ids in persisted input should not overwrite first entry.
+    let mut g1 = group.clone();
+    g1.group_state.epoch = 11;
+    let mut g2 = group.clone();
+    g2.group_state.epoch = 99;
+    let restored_dup = RuntimeState::restore(PersistedClientState {
+        identity: None,
+        groups: vec![g1, g2],
+        key_packages: Vec::new(),
+        key_package_counter: 0,
+    });
+    let only = restored_dup.groups.get(&key).expect("group exists");
+    assert_eq!(only.group_state.epoch, 11);
 }

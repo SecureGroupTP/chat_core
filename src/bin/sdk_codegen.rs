@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -49,13 +49,15 @@ fn main() -> Result<(), String> {
         .map_err(|e| format!("failed to read {}: {e}", spec_path.display()))?;
     let mut spec: ApiSpec = serde_json::from_str(&spec_raw)
         .map_err(|e| format!("failed to parse {}: {e}", spec_path.display()))?;
+    validate_spec(&spec)?;
 
     let ffi_docs = collect_ffi_docs(Path::new("src/ffi.rs"))?;
     for op in &mut spec.operations {
+        op.doc = op.doc.trim().to_string();
         if op.doc.trim().is_empty()
             && let Some(doc) = ffi_docs.get(&op.ffi_name)
         {
-            op.doc = doc.clone();
+            op.doc = doc.trim().to_string();
         }
     }
 
@@ -71,31 +73,74 @@ fn main() -> Result<(), String> {
     fs::create_dir_all(&dart_dir)
         .map_err(|e| format!("failed to create {}: {e}", dart_dir.display()))?;
 
-    fs::write(cpp_dir.join("messenger_mls.hpp"), render_cpp(&spec))
-        .map_err(|e| format!("failed to write cpp sdk: {e}"))?;
-    fs::write(cpp_dir.join("smoke.cpp"), render_cpp_smoke())
-        .map_err(|e| format!("failed to write cpp smoke: {e}"))?;
-
-    fs::write(go_dir.join("messenger_mls.go"), render_go(&spec))
-        .map_err(|e| format!("failed to write go sdk: {e}"))?;
-    fs::write(go_dir.join("go.mod"), render_go_mod())
-        .map_err(|e| format!("failed to write go.mod: {e}"))?;
-    fs::write(go_dir.join("smoke_test.go"), render_go_smoke())
-        .map_err(|e| format!("failed to write go smoke: {e}"))?;
-
-    fs::write(dart_dir.join("pubspec.yaml"), render_dart_pubspec())
-        .map_err(|e| format!("failed to write dart pubspec: {e}"))?;
-    fs::write(dart_dir.join("messenger_mls.dart"), render_dart(&spec))
-        .map_err(|e| format!("failed to write dart sdk: {e}"))?;
-
-    fs::write(
+    write_generated(
+        cpp_dir.join("messenger_mls.hpp"),
+        &render_cpp(&spec),
+        "cpp sdk",
+    )?;
+    write_generated(cpp_dir.join("smoke.cpp"), &render_cpp_smoke(), "cpp smoke")?;
+    write_generated(go_dir.join("messenger_mls.go"), &render_go(&spec), "go sdk")?;
+    write_generated(go_dir.join("go.mod"), render_go_mod(), "go.mod")?;
+    write_generated(go_dir.join("smoke_test.go"), &render_go_smoke(), "go smoke")?;
+    write_generated(
+        dart_dir.join("pubspec.yaml"),
+        render_dart_pubspec(),
+        "dart pubspec",
+    )?;
+    write_generated(
+        dart_dir.join("messenger_mls.dart"),
+        &render_dart(&spec),
+        "dart sdk",
+    )?;
+    write_generated(
         out_root.join("api_spec.resolved.json"),
-        serde_json::to_string_pretty(&spec)
+        &serde_json::to_string_pretty(&spec)
             .map_err(|e| format!("failed to encode resolved spec: {e}"))?,
-    )
-    .map_err(|e| format!("failed to write resolved spec: {e}"))?;
+        "resolved spec",
+    )?;
 
     println!("Generated SDKs into {}", out_root.display());
+    Ok(())
+}
+
+fn write_generated(path: PathBuf, content: &str, tag: &str) -> Result<(), String> {
+    fs::write(&path, content)
+        .map_err(|e| format!("failed to write {tag} ({}): {e}", path.display()))
+}
+
+fn validate_spec(spec: &ApiSpec) -> Result<(), String> {
+    if spec.namespace.trim().is_empty() {
+        return Err("namespace must not be empty".to_string());
+    }
+    if spec.ffi_header.trim().is_empty() {
+        return Err("ffi_header must not be empty".to_string());
+    }
+    if spec.operations.is_empty() {
+        return Err("operations must not be empty".to_string());
+    }
+
+    let mut names = HashSet::new();
+    let mut ffi_names = HashSet::new();
+    for (idx, op) in spec.operations.iter().enumerate() {
+        if op.name.trim().is_empty() {
+            return Err(format!("operation at index {idx} has empty name"));
+        }
+        if op.ffi_name.trim().is_empty() {
+            return Err(format!("operation '{}' has empty ffi_name", op.name));
+        }
+        if !names.insert(op.name.as_str()) {
+            return Err(format!("duplicate operation name '{}'", op.name));
+        }
+        if !ffi_names.insert(op.ffi_name.as_str()) {
+            return Err(format!("duplicate ffi_name '{}'", op.ffi_name));
+        }
+        if !op.ffi_name.starts_with("messenger_mls_") {
+            return Err(format!(
+                "ffi_name '{}' must start with 'messenger_mls_'",
+                op.ffi_name
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -133,10 +178,16 @@ fn parse_fn_name(line: &str) -> Option<&str> {
         return None;
     }
 
-    let idx = line.find(" fn ")? + 4;
-    let tail = &line[idx..];
-    let end = tail.find('(')?;
-    Some(tail[..end].trim())
+    let fn_pos = line.find(" fn ")? + 4;
+    let tail = &line[fn_pos..];
+    let name_start = tail.find(|c: char| !c.is_whitespace())?;
+    let tail = &tail[name_start..];
+    let end = tail.find(|c: char| c == '(' || c.is_whitespace())?;
+    let name = &tail[..end];
+    if name.is_empty() {
+        return None;
+    }
+    Some(name)
 }
 
 fn to_camel_case(s: &str) -> String {
@@ -343,9 +394,9 @@ fn render_cpp(spec: &ApiSpec) -> String {
     out.push_str("  }\n\n");
     out.push_str("  [[noreturn]] void throwLastError(uint32_t code) const {\n");
     out.push_str("    MlsBuffer err{};\n");
-    out.push_str("    messenger_mls_last_error(handle_, &err);\n");
+    out.push_str("    const auto status = messenger_mls_last_error(handle_, &err);\n");
     out.push_str("    auto msg = takeBufferUtf8(err);\n");
-    out.push_str("    if (msg.empty()) {\n");
+    out.push_str("    if (status != MLS_OK || msg.empty()) {\n");
     out.push_str("      msg = \"operation failed\";\n");
     out.push_str("    }\n");
     out.push_str("    throw MlsError(code, std::move(msg));\n");
@@ -378,7 +429,7 @@ fn render_cpp(spec: &ApiSpec) -> String {
             }
         }
     }
-    out.push_str("    return 1;\n");
+    out.push_str("    return MLS_INVALID_ARGUMENT;\n");
     out.push_str("  }\n\n");
 
     out.push_str("  uint32_t callByNameInput(const char* name, const uint8_t* ptr, size_t len, MlsBuffer* out_buf) {\n");
@@ -402,7 +453,7 @@ fn render_cpp(spec: &ApiSpec) -> String {
             }
         }
     }
-    out.push_str("    return 1;\n");
+    out.push_str("    return MLS_INVALID_ARGUMENT;\n");
     out.push_str("  }\n\n");
 
     out.push_str(
@@ -428,7 +479,7 @@ fn render_cpp(spec: &ApiSpec) -> String {
             }
         }
     }
-    out.push_str("    return 1;\n");
+    out.push_str("    return MLS_INVALID_ARGUMENT;\n");
     out.push_str("  }\n\n");
 
     out.push_str("  void callVoidInput(const char* name, std::string_view json) {\n");
@@ -563,8 +614,11 @@ fn render_go(spec: &ApiSpec) -> String {
     out.push_str("\t\treturn \"\"\n");
     out.push_str("\t}\n");
     out.push_str("\tvar buf C.MlsBuffer\n");
-    out.push_str("\t_ = C.messenger_mls_last_error(c.handle, &buf)\n");
+    out.push_str("\tstatus := C.messenger_mls_last_error(c.handle, &buf)\n");
     out.push_str("\tdefer C.messenger_mls_buffer_free(buf)\n");
+    out.push_str("\tif status != 0 {\n");
+    out.push_str("\t\treturn \"\"\n");
+    out.push_str("\t}\n");
     out.push_str("\tif buf.ptr == nil || buf.len == 0 {\n");
     out.push_str("\t\treturn \"\"\n");
     out.push_str("\t}\n");
@@ -900,6 +954,11 @@ fn render_dart(spec: &ApiSpec) -> String {
     out.push_str("    freeFn(_handle);\n");
     out.push_str("    _handle = ffi.nullptr;\n");
     out.push_str("  }\n\n");
+    out.push_str("  void _ensureOpen() {\n");
+    out.push_str("    if (_handle == ffi.nullptr) {\n");
+    out.push_str("      throw StateError('MessengerMls is closed');\n");
+    out.push_str("    }\n");
+    out.push_str("  }\n\n");
     out.push_str("  String _lastError() {\n");
     out.push_str("    final fn = _lib.lookupFunction<_LastErrorNative, _LastErrorDart>('messenger_mls_last_error');\n");
     out.push_str("    final freeBuf = _lib.lookupFunction<_BufferFreeNative, _BufferFreeDart>('messenger_mls_buffer_free');\n");
@@ -935,18 +994,21 @@ fn render_dart(spec: &ApiSpec) -> String {
 
     out.push_str("  String _takeJson(MlsBuffer buf) => utf8.decode(_takeBytes(buf), allowMalformed: true);\n\n");
     out.push_str("  int _callNoInputVoid(String symbol) {\n");
+    out.push_str("    _ensureOpen();\n");
     out.push_str(
         "    final fn = _lib.lookupFunction<_NoInputVoidNative, _NoInputVoidDart>(symbol);\n",
     );
     out.push_str("    return fn(_handle);\n");
     out.push_str("  }\n\n");
     out.push_str("  int _callNoInputOut(String symbol, ffi.Pointer<MlsBuffer> outBuf) {\n");
+    out.push_str("    _ensureOpen();\n");
     out.push_str(
         "    final fn = _lib.lookupFunction<_NoInputOutNative, _NoInputOutDart>(symbol);\n",
     );
     out.push_str("    return fn(_handle, outBuf);\n");
     out.push_str("  }\n\n");
     out.push_str("  int _callInputVoid(String symbol, Uint8List data) {\n");
+    out.push_str("    _ensureOpen();\n");
     out.push_str("    final fn = _lib.lookupFunction<_InputVoidNative, _InputVoidDart>(symbol);\n");
     out.push_str("    if (data.isEmpty) return fn(_handle, ffi.nullptr, 0);\n");
     out.push_str("    final ptr = calloc<ffi.Uint8>(data.length);\n");
@@ -960,6 +1022,7 @@ fn render_dart(spec: &ApiSpec) -> String {
     out.push_str(
         "  int _callInputOut(String symbol, Uint8List data, ffi.Pointer<MlsBuffer> outBuf) {\n",
     );
+    out.push_str("    _ensureOpen();\n");
     out.push_str("    final fn = _lib.lookupFunction<_InputOutNative, _InputOutDart>(symbol);\n");
     out.push_str("    if (data.isEmpty) return fn(_handle, ffi.nullptr, 0, outBuf);\n");
     out.push_str("    final ptr = calloc<ffi.Uint8>(data.length);\n");
@@ -971,10 +1034,12 @@ fn render_dart(spec: &ApiSpec) -> String {
     out.push_str("    }\n");
     out.push_str("  }\n\n");
     out.push_str("  int _callU32Void(String symbol, int value) {\n");
+    out.push_str("    _ensureOpen();\n");
     out.push_str("    final fn = _lib.lookupFunction<_U32VoidNative, _U32VoidDart>(symbol);\n");
     out.push_str("    return fn(_handle, value);\n");
     out.push_str("  }\n\n");
     out.push_str("  int _callU32Out(String symbol, int value, ffi.Pointer<MlsBuffer> outBuf) {\n");
+    out.push_str("    _ensureOpen();\n");
     out.push_str("    final fn = _lib.lookupFunction<_U32OutNative, _U32OutDart>(symbol);\n");
     out.push_str("    return fn(_handle, value, outBuf);\n");
     out.push_str("  }\n\n");
@@ -1222,12 +1287,47 @@ mod tests {
             parse_fn_name("pub extern \"C\" fn abc(x: i32) -> u32 {"),
             Some("abc")
         );
+        assert_eq!(
+            parse_fn_name("pub unsafe extern \"C\" fn xyz(x: i32) -> u32 {"),
+            Some("xyz")
+        );
+        assert_eq!(
+            parse_fn_name("pub unsafe extern \"C\" fn    spaced   (x: i32) -> u32 {"),
+            Some("spaced")
+        );
         assert_eq!(parse_fn_name("fn nope() {}"), None);
 
         assert_eq!(to_camel_case("hello_world"), "helloWorld");
         assert_eq!(to_pascal_case("hello_world"), "HelloWorld");
         assert_eq!(to_pascal_case(""), "");
         assert_eq!(escape_cpp_string("a\\\"b"), "a\\\\\\\"b");
+    }
+
+    #[test]
+    fn validate_spec_rejects_invalid_shapes() {
+        let mut spec = full_spec();
+        spec.namespace.clear();
+        assert!(validate_spec(&spec).is_err());
+
+        let mut spec = full_spec();
+        spec.ffi_header.clear();
+        assert!(validate_spec(&spec).is_err());
+
+        let mut spec = full_spec();
+        spec.operations.clear();
+        assert!(validate_spec(&spec).is_err());
+
+        let mut spec = full_spec();
+        spec.operations[1].name = spec.operations[0].name.clone();
+        assert!(validate_spec(&spec).is_err());
+
+        let mut spec = full_spec();
+        spec.operations[1].ffi_name = spec.operations[0].ffi_name.clone();
+        assert!(validate_spec(&spec).is_err());
+
+        let mut spec = full_spec();
+        spec.operations[0].ffi_name = "bad_prefix".to_string();
+        assert!(validate_spec(&spec).is_err());
     }
 
     #[test]
@@ -1271,14 +1371,17 @@ pub extern "C" fn messenger_mls_def(x: i32) -> u32 { 0 }
         assert!(cpp.contains("class MessengerMls"));
         assert!(cpp.contains("jsonVoid"));
         assert!(cpp.contains("u32Bytes"));
+        assert!(cpp.contains("MLS_INVALID_ARGUMENT"));
 
         let go = render_go(&spec);
         assert!(go.contains("func (c *Client) JsonVoid"));
         assert!(go.contains("func (c *Client) U32Bytes"));
+        assert!(go.contains("status := C.messenger_mls_last_error"));
 
         let dart = render_dart(&spec);
         assert!(dart.contains("void jsonVoidSync"));
         assert!(dart.contains("Uint8List u32BytesSync"));
+        assert!(dart.contains("void _ensureOpen()"));
     }
 
     #[test]

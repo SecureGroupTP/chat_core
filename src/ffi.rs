@@ -62,6 +62,16 @@ fn write_out(out: *mut MlsBuffer, data: Vec<u8>) -> StatusCode {
         return StatusCode::InvalidArgument;
     }
 
+    // SAFETY: caller provides a valid pointer to output buffer descriptor.
+    unsafe {
+        (*out).ptr = ptr::null_mut();
+        (*out).len = 0;
+    }
+
+    if data.is_empty() {
+        return StatusCode::Ok;
+    }
+
     let mut boxed = data.into_boxed_slice();
     let ptr = boxed.as_mut_ptr();
     let len = boxed.len();
@@ -77,9 +87,9 @@ fn write_out(out: *mut MlsBuffer, data: Vec<u8>) -> StatusCode {
 }
 
 /// Читает входные байты вызывающей стороны из пары сырого указателя и длины.
-fn read_input<'a>(input_ptr: *const u8, input_len: usize) -> Result<&'a [u8], Error> {
+fn read_input(input_ptr: *const u8, input_len: usize) -> Result<Vec<u8>, Error> {
     if input_len == 0 {
-        return Ok(&[]);
+        return Ok(Vec::new());
     }
     if input_ptr.is_null() {
         return Err(Error::new(
@@ -90,13 +100,19 @@ fn read_input<'a>(input_ptr: *const u8, input_len: usize) -> Result<&'a [u8], Er
 
     // SAFETY: input pointer and length are validated by the checks above.
     let bytes = unsafe { slice::from_raw_parts(input_ptr, input_len) };
-    Ok(bytes)
+    Ok(bytes.to_vec())
 }
 
 /// Парсит JSON payload из входа в формате указатель/длина.
 fn parse_json<T: DeserializeOwned>(input_ptr: *const u8, input_len: usize) -> Result<T, Error> {
     let bytes = read_input(input_ptr, input_len)?;
-    serde_json::from_slice(bytes)
+    if bytes.is_empty() {
+        return Err(Error::new(
+            StatusCode::InvalidArgument,
+            "input json is empty",
+        ));
+    }
+    serde_json::from_slice(&bytes)
         .map_err(|e| Error::new(StatusCode::InvalidArgument, format!("invalid json: {e}")))
 }
 
@@ -145,6 +161,9 @@ where
     if handle.is_null() {
         return StatusCode::InvalidArgument as u32;
     }
+    if out.is_null() {
+        return StatusCode::InvalidArgument as u32;
+    }
 
     // SAFETY: handle is checked for null and created by messenger_mls_new.
     let handle_ref = unsafe { &*handle };
@@ -157,6 +176,39 @@ where
         .and_then(|value| encode_json(&value))
         .map(|json| write_out(out, json))
     {
+        Ok(code) => {
+            if let Ok(mut slot) = handle_ref.last_error.lock() {
+                slot.clear();
+            }
+            code as u32
+        }
+        Err(e) => {
+            set_last_error(handle_ref, &e);
+            e.code as u32
+        }
+    }
+}
+
+/// Вспомогательная обёртка для FFI-методов, возвращающих сырые байты через [`MlsBuffer`].
+fn run_out_bytes<F>(handle: *mut MessengerMlsHandle, out: *mut MlsBuffer, f: F) -> u32
+where
+    F: FnOnce(&mut MessengerMls) -> Result<Bytes, Error>,
+{
+    if handle.is_null() {
+        return StatusCode::InvalidArgument as u32;
+    }
+    if out.is_null() {
+        return StatusCode::InvalidArgument as u32;
+    }
+
+    // SAFETY: handle is checked for null and created by messenger_mls_new.
+    let handle_ref = unsafe { &*handle };
+    let mut guard = match handle_ref.inner.lock() {
+        Ok(g) => g,
+        Err(_) => return StatusCode::InternalError as u32,
+    };
+
+    match f(&mut guard).map(|bytes| write_out(out, bytes)) {
         Ok(code) => {
             if let Ok(mut slot) = handle_ref.last_error.lock() {
                 slot.clear();
@@ -203,7 +255,7 @@ pub unsafe extern "C" fn messenger_mls_free(handle: *mut MessengerMlsHandle) {
 /// `buf` должен быть буфером, возвращённым этой библиотекой через out-параметр,
 /// и не должен освобождаться более одного раза.
 pub unsafe extern "C" fn messenger_mls_buffer_free(buf: MlsBuffer) {
-    if buf.ptr.is_null() || buf.len == 0 {
+    if buf.ptr.is_null() {
         return;
     }
 
@@ -222,6 +274,9 @@ pub unsafe extern "C" fn messenger_mls_last_error(
     out: *mut MlsBuffer,
 ) -> u32 {
     if handle.is_null() {
+        return StatusCode::InvalidArgument as u32;
+    }
+    if out.is_null() {
         return StatusCode::InvalidArgument as u32;
     }
 
@@ -261,7 +316,7 @@ pub extern "C" fn messenger_mls_restore_client(
 ) -> u32 {
     run_void(handle, |svc| {
         let bytes = read_input(input_ptr, input_len)?;
-        svc.restore_client(bytes)
+        svc.restore_client(&bytes)
     })
 }
 
@@ -275,29 +330,7 @@ pub unsafe extern "C" fn messenger_mls_export_client_state(
     handle: *mut MessengerMlsHandle,
     out: *mut MlsBuffer,
 ) -> u32 {
-    if handle.is_null() {
-        return StatusCode::InvalidArgument as u32;
-    }
-
-    // SAFETY: handle is checked for null and created by messenger_mls_new.
-    let handle_ref = unsafe { &*handle };
-    let guard = match handle_ref.inner.lock() {
-        Ok(g) => g,
-        Err(_) => return StatusCode::InternalError as u32,
-    };
-
-    match guard.export_client_state() {
-        Ok(bytes) => {
-            if let Ok(mut slot) = handle_ref.last_error.lock() {
-                slot.clear();
-            }
-            write_out(out, bytes) as u32
-        }
-        Err(e) => {
-            set_last_error(handle_ref, &e);
-            e.code as u32
-        }
-    }
+    run_out_bytes(handle, out, |svc| svc.export_client_state())
 }
 
 #[unsafe(no_mangle)]
@@ -407,7 +440,7 @@ pub extern "C" fn messenger_mls_join_from_welcome(
 ) -> u32 {
     run_out(handle, out, |svc| {
         let welcome = read_input(welcome_ptr, welcome_len)?;
-        svc.join_from_welcome(welcome)
+        svc.join_from_welcome(&welcome)
     })
 }
 
@@ -561,6 +594,12 @@ mod tests {
             }),
             StatusCode::InvalidArgument as u32
         );
+        assert_eq!(
+            run_out_bytes(std::ptr::null_mut(), std::ptr::null_mut(), |_svc| Ok(
+                vec![]
+            )),
+            StatusCode::InvalidArgument as u32
+        );
         let handle_ok = messenger_mls_new();
         assert!(!handle_ok.is_null());
         let mut out_ok = MlsBuffer::default();
@@ -632,12 +671,34 @@ mod tests {
             unsafe { messenger_mls_last_error(std::ptr::null_mut(), std::ptr::null_mut()) },
             StatusCode::InvalidArgument as u32
         );
+        // SAFETY: valid handle but null out branch.
+        assert_eq!(
+            unsafe { messenger_mls_last_error(handle, std::ptr::null_mut()) },
+            StatusCode::InvalidArgument as u32
+        );
 
         let req = serde_json::to_vec(&make_params()).expect("serialize");
         assert_eq!(
             messenger_mls_create_client(handle, req.as_ptr(), req.len()),
             StatusCode::Ok as u32
         );
+
+        // Null out for run_out-based API should fail fast without mutating state.
+        let code_kp_null_out = messenger_mls_create_key_packages(handle, 1, std::ptr::null_mut());
+        assert_eq!(code_kp_null_out, StatusCode::InvalidArgument as u32);
+        let mut exported_after_null_out = MlsBuffer::default();
+        let export_code =
+            unsafe { messenger_mls_export_client_state(handle, &mut exported_after_null_out) };
+        assert_eq!(export_code, StatusCode::Ok as u32);
+        // SAFETY: buffer was allocated by messenger_mls_export_client_state.
+        let exported_state = unsafe {
+            std::slice::from_raw_parts(exported_after_null_out.ptr, exported_after_null_out.len)
+        };
+        let persisted: crate::state::PersistedClientState =
+            serde_json::from_slice(exported_state).expect("decode persisted");
+        assert_eq!(persisted.key_package_counter, 0);
+        // SAFETY: free buffer once.
+        unsafe { messenger_mls_buffer_free(exported_after_null_out) };
 
         // Ensure remove wrapper path is exercised.
         let remove_req = serde_json::to_vec(&crate::types::RemoveRequest {
@@ -658,6 +719,10 @@ mod tests {
             &mut out as *mut MlsBuffer,
         );
         assert_eq!(code_remove, StatusCode::NotFound as u32);
+
+        // Empty JSON is now rejected explicitly.
+        let code_empty_json = messenger_mls_get_group_state(handle, std::ptr::null(), 0, &mut out);
+        assert_eq!(code_empty_json, StatusCode::InvalidArgument as u32);
 
         // SAFETY: free exactly once.
         unsafe { messenger_mls_free(handle) };

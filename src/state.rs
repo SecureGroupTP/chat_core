@@ -126,9 +126,16 @@ impl PersistedClientState {
 
     /// Преобразует runtime-состояние в памяти в persisted-представление.
     pub fn from_runtime(runtime: &RuntimeState) -> Self {
+        let mut groups: Vec<_> = runtime.groups.values().cloned().collect();
+        groups.sort_by(|a, b| {
+            a.group_state
+                .group_id
+                .value
+                .cmp(&b.group_state.group_id.value)
+        });
         Self {
             identity: runtime.identity.clone(),
-            groups: runtime.groups.values().cloned().collect(),
+            groups,
             key_packages: runtime.key_packages.clone(),
             key_package_counter: runtime.key_package_counter,
         }
@@ -164,7 +171,7 @@ impl RuntimeState {
         let mut groups = HashMap::new();
         for group in persisted.groups {
             let key = to_group_key(&group.group_state.group_id.value);
-            groups.insert(key, group);
+            groups.entry(key).or_insert(group);
         }
 
         Self {
@@ -184,10 +191,11 @@ impl Default for RuntimeState {
 
 /// Преобразует бинарный group id в стабильный hex-ключ в нижнем регистре.
 pub fn to_group_key(group_id: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(group_id.len() * 2);
-    for b in group_id {
-        use std::fmt::Write as _;
-        let _ = write!(&mut out, "{b:02x}");
+    for &b in group_id {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
     }
     out
 }

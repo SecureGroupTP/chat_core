@@ -147,3 +147,41 @@ pub extern "C" fn messenger_mls_create_client(
     let _ = fs::remove_dir_all(&cwd);
     let _ = fs::remove_dir_all(&out_dir);
 }
+
+#[test]
+fn sdk_codegen_fails_for_duplicate_operation_names() {
+    let cwd = temp_dir("chat-core-sdk-invalid-spec-cwd");
+    let out_dir = temp_dir("chat-core-sdk-invalid-spec-out");
+    fs::create_dir_all(cwd.join("api")).expect("create api dir");
+    fs::create_dir_all(cwd.join("src")).expect("create src dir");
+
+    fs::write(
+        cwd.join("api/sdk_api.json"),
+        r#"{
+  "namespace": "MessengerMls",
+  "ffi_header": "messenger_mls.h",
+  "operations": [
+    { "name": "dup", "ffi_name": "messenger_mls_a", "input": "none", "output": "void", "doc": "" },
+    { "name": "dup", "ffi_name": "messenger_mls_b", "input": "none", "output": "void", "doc": "" }
+  ]
+}"#,
+    )
+    .expect("write api spec");
+    fs::write(cwd.join("src/ffi.rs"), "").expect("write empty ffi");
+
+    let bin = env!("CARGO_BIN_EXE_sdk_codegen");
+    let output = Command::new(bin)
+        .arg(&out_dir)
+        .current_dir(&cwd)
+        .output()
+        .expect("run sdk_codegen");
+    assert!(!output.status.success(), "sdk_codegen should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("duplicate operation name"),
+        "unexpected stderr: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&cwd);
+    let _ = fs::remove_dir_all(&out_dir);
+}

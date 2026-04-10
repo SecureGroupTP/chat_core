@@ -91,6 +91,7 @@ pub struct OpenMlsBackend {
 
 impl OpenMlsBackend {
     const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
+    const MAX_KEY_PACKAGES_PER_CALL: u32 = 4096;
 
     /// Возвращает key pair подписи из настроенного сырого ключевого материала.
     fn signer(&self) -> MlsResult<SignatureKeyPair> {
@@ -123,24 +124,32 @@ impl OpenMlsBackend {
             .ok_or_else(|| Error::new(StatusCode::NotFound, "group not found"))
     }
 
+    /// Проверяет, что `group_id` не пустой.
+    fn validate_group_id(group_id: &GroupId) -> MlsResult<()> {
+        if group_id.value.is_empty() {
+            return Err(Error::new(StatusCode::InvalidArgument, "group_id is empty"));
+        }
+        Ok(())
+    }
+
     /// Строит снимок для сервисного слоя из экземпляра OpenMLS-группы.
-    fn snapshot_for(group: &MlsGroup, provider: &OpenMlsRustCrypto) -> GroupSnapshot {
+    fn snapshot_for(group: &MlsGroup, provider: &OpenMlsRustCrypto) -> MlsResult<GroupSnapshot> {
         let serialized_state = group
             .export_ratchet_tree()
             .tls_serialize_detached()
-            .unwrap_or_default();
+            .map_err(|e| Self::map_err("serialize ratchet tree", e))?;
 
         let secret_material = group
             .export_secret(provider.crypto(), "chat_core_state", &[], 32)
-            .unwrap_or_default();
+            .map_err(|e| Self::map_err("export group secret", e))?;
 
-        GroupSnapshot {
+        Ok(GroupSnapshot {
             epoch: group.epoch().as_u64(),
             active: group.is_active(),
             serialized_state,
             secret_material,
             self_leaf_index: Some(group.own_leaf_index().u32()),
-        }
+        })
     }
 
     /// Разбирает Ed25519 приватный ключ в формате, который принимает публичный API.
@@ -182,6 +191,7 @@ impl OpenMlsBackend {
 
 impl MlsBackend for OpenMlsBackend {
     fn reset(&mut self) {
+        self.provider = OpenMlsRustCrypto::default();
         self.signer_private = None;
         self.signer_public = None;
         self.credential_with_key = None;
@@ -189,6 +199,7 @@ impl MlsBackend for OpenMlsBackend {
     }
 
     fn configure_client(&mut self, params: &CreateClientParams) -> MlsResult<()> {
+        self.reset();
         let (private, public) = Self::parse_device_key(&params.device_signature_private_key)?;
 
         let signer = SignatureKeyPair::from_raw(
@@ -227,6 +238,12 @@ impl MlsBackend for OpenMlsBackend {
                 "count must be greater than 0",
             ));
         }
+        if count > Self::MAX_KEY_PACKAGES_PER_CALL {
+            return Err(Error::new(
+                StatusCode::InvalidArgument,
+                format!("count must be <= {}", Self::MAX_KEY_PACKAGES_PER_CALL),
+            ));
+        }
 
         let signer = self.signer()?;
         let credential = self.credential()?;
@@ -253,9 +270,7 @@ impl MlsBackend for OpenMlsBackend {
     }
 
     fn create_group(&mut self, group_id: &GroupId) -> MlsResult<GroupSnapshot> {
-        if group_id.value.is_empty() {
-            return Err(Error::new(StatusCode::InvalidArgument, "group_id is empty"));
-        }
+        Self::validate_group_id(group_id)?;
         let key = to_group_key(&group_id.value);
         if self.groups.contains_key(&key) {
             return Err(Error::new(
@@ -280,12 +295,19 @@ impl MlsBackend for OpenMlsBackend {
         )
         .map_err(|e| Self::map_err("create group", e))?;
 
-        let snapshot = Self::snapshot_for(&group, &self.provider);
+        let snapshot = Self::snapshot_for(&group, &self.provider)?;
         self.groups.insert(key, group);
         Ok(snapshot)
     }
 
     fn invite(&mut self, group_id: &GroupId, keypackage: &[u8]) -> MlsResult<CommitArtifacts> {
+        Self::validate_group_id(group_id)?;
+        if keypackage.is_empty() {
+            return Err(Error::new(
+                StatusCode::InvalidArgument,
+                "keypackage is empty",
+            ));
+        }
         let signer = self.signer()?;
 
         let key_package_in = KeyPackageIn::tls_deserialize_exact(keypackage)
@@ -317,11 +339,17 @@ impl MlsBackend for OpenMlsBackend {
         Ok(CommitArtifacts {
             commit_message,
             welcome_message,
-            snapshot: Self::snapshot_for(group, &self.provider),
+            snapshot: Self::snapshot_for(group, &self.provider)?,
         })
     }
 
     fn join_from_welcome(&mut self, welcome_message: &[u8]) -> MlsResult<(GroupId, GroupSnapshot)> {
+        if welcome_message.is_empty() {
+            return Err(Error::new(
+                StatusCode::InvalidArgument,
+                "welcome_message is empty",
+            ));
+        }
         let mls_message = MlsMessageIn::tls_deserialize_exact(welcome_message)
             .map_err(|e| Self::map_err("deserialize welcome message", e))?;
         let welcome = match mls_message.extract() {
@@ -348,7 +376,7 @@ impl MlsBackend for OpenMlsBackend {
             value: group.group_id().as_slice().to_vec(),
         };
         let key = to_group_key(&group_id.value);
-        let snapshot = Self::snapshot_for(&group, &self.provider);
+        let snapshot = Self::snapshot_for(&group, &self.provider)?;
         self.groups.insert(key, group);
         Ok((group_id, snapshot))
     }
@@ -358,6 +386,7 @@ impl MlsBackend for OpenMlsBackend {
         group_id: &GroupId,
         removed_leaf_index: Option<u32>,
     ) -> MlsResult<CommitArtifacts> {
+        Self::validate_group_id(group_id)?;
         let signer = self.signer()?;
 
         let leaf = removed_leaf_index.ok_or_else(|| {
@@ -391,11 +420,12 @@ impl MlsBackend for OpenMlsBackend {
         Ok(CommitArtifacts {
             commit_message,
             welcome_message,
-            snapshot: Self::snapshot_for(group, &self.provider),
+            snapshot: Self::snapshot_for(group, &self.provider)?,
         })
     }
 
     fn self_update(&mut self, group_id: &GroupId) -> MlsResult<CommitArtifacts> {
+        Self::validate_group_id(group_id)?;
         let signer = self.signer()?;
         let key = to_group_key(&group_id.value);
         let group = self
@@ -422,11 +452,12 @@ impl MlsBackend for OpenMlsBackend {
         Ok(CommitArtifacts {
             commit_message,
             welcome_message,
-            snapshot: Self::snapshot_for(group, &self.provider),
+            snapshot: Self::snapshot_for(group, &self.provider)?,
         })
     }
 
     fn encrypt(&mut self, group_id: &GroupId, plaintext: &[u8], aad: &[u8]) -> MlsResult<Bytes> {
+        Self::validate_group_id(group_id)?;
         let key = to_group_key(&group_id.value);
         let signer = self.signer()?;
         let provider = &self.provider;
@@ -445,6 +476,12 @@ impl MlsBackend for OpenMlsBackend {
     }
 
     fn handle_incoming(&mut self, message: &IncomingMessage) -> MlsResult<Option<Bytes>> {
+        if message.payload.is_empty() {
+            return Err(Error::new(
+                StatusCode::InvalidArgument,
+                "incoming payload is empty",
+            ));
+        }
         match message.kind {
             IncomingMessageKind::Welcome => {
                 let _ = self.join_from_welcome(&message.payload)?;
@@ -488,10 +525,12 @@ impl MlsBackend for OpenMlsBackend {
     }
 
     fn has_pending_commit(&self, group_id: &GroupId) -> MlsResult<bool> {
+        Self::validate_group_id(group_id)?;
         Ok(self.group_ref(group_id)?.pending_commit().is_some())
     }
 
     fn clear_pending_commit(&mut self, group_id: &GroupId) -> MlsResult<()> {
+        Self::validate_group_id(group_id)?;
         let storage = self.provider.storage();
         let key = to_group_key(&group_id.value);
         let group = self
@@ -504,6 +543,7 @@ impl MlsBackend for OpenMlsBackend {
     }
 
     fn drop_group(&mut self, group_id: &GroupId) -> MlsResult<()> {
+        Self::validate_group_id(group_id)?;
         let key = to_group_key(&group_id.value);
         if self.groups.remove(&key).is_none() {
             return Err(Error::new(StatusCode::NotFound, "group not found"));

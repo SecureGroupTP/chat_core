@@ -213,6 +213,13 @@ fn backend_direct_error_and_edge_branches() {
         backend.create_key_packages(0).expect_err("zero count").code,
         StatusCode::InvalidArgument
     );
+    assert_eq!(
+        backend
+            .create_key_packages(4097)
+            .expect_err("too large count")
+            .code,
+        StatusCode::InvalidArgument
+    );
 
     assert_eq!(
         backend
@@ -253,6 +260,13 @@ fn backend_direct_error_and_edge_branches() {
             .expect_err("invalid welcome")
             .code,
         StatusCode::CryptoError
+    );
+    assert_eq!(
+        backend
+            .join_from_welcome(&[])
+            .expect_err("empty welcome")
+            .code,
+        StatusCode::InvalidArgument
     );
 
     assert_eq!(
@@ -297,6 +311,23 @@ fn backend_direct_error_and_edge_branches() {
             .code,
         StatusCode::CryptoError
     );
+    assert_eq!(
+        backend
+            .handle_incoming(&IncomingMessage {
+                kind: IncomingMessageKind::GroupMessage,
+                payload: vec![],
+            })
+            .expect_err("empty incoming")
+            .code,
+        StatusCode::InvalidArgument
+    );
+    assert_eq!(
+        backend
+            .encrypt(&GroupId { value: vec![] }, b"abc", b"aad")
+            .expect_err("empty group id")
+            .code,
+        StatusCode::InvalidArgument
+    );
 
     assert_eq!(
         backend
@@ -318,6 +349,25 @@ fn backend_direct_error_and_edge_branches() {
         StatusCode::NotFound
     );
 
+    // Reconfiguration should clear runtime groups to prevent stale state reuse.
+    backend
+        .create_group(&GroupId {
+            value: b"old-group".to_vec(),
+        })
+        .expect("create old group");
+    backend
+        .configure_client(&params32("b", "d", 77))
+        .expect("reconfigure");
+    assert_eq!(
+        backend
+            .has_pending_commit(&GroupId {
+                value: b"old-group".to_vec(),
+            })
+            .expect_err("group must be cleared")
+            .code,
+        StatusCode::NotFound
+    );
+
     assert_eq!(
         backend
             .drop_group(&GroupId {
@@ -328,6 +378,9 @@ fn backend_direct_error_and_edge_branches() {
         StatusCode::NotFound
     );
 
+    backend
+        .create_group(&group_id)
+        .expect("recreate group after reconfigure");
     backend.drop_group(&group_id).expect("drop existing group");
 }
 

@@ -124,6 +124,15 @@ fn service_paths_with_script_backend() {
         value: b"script-group".to_vec(),
     };
     let _ = svc.create_group(gid.clone()).expect("create group");
+    let persisted_after_create: chat_core::state::PersistedClientState =
+        serde_json::from_slice(&svc.export_client_state().expect("export"))
+            .expect("decode persisted");
+    let created_group = persisted_after_create
+        .groups
+        .iter()
+        .find(|g| g.group_state.group_id.value == gid.value)
+        .expect("created group exists");
+    assert_eq!(created_group.ratchet_tree_cache, vec![1, 2, 3]);
 
     // Duplicate group path.
     assert_eq!(
@@ -157,6 +166,19 @@ fn service_paths_with_script_backend() {
         .expect("remove existing invited member");
     assert!(!remove.commit_message.is_empty());
 
+    assert_eq!(
+        svc.remove(RemoveRequest {
+            group_id: gid.clone(),
+            removed_client: ClientId {
+                user_id: "other".to_string(),
+                device_id: "d1".to_string(),
+            },
+        })
+        .expect_err("double remove should fail before backend")
+        .code,
+        StatusCode::NotFound
+    );
+
     let self_remove = svc
         .remove(RemoveRequest {
             group_id: gid.clone(),
@@ -167,6 +189,15 @@ fn service_paths_with_script_backend() {
         })
         .expect("self remove path");
     assert!(!self_remove.group_state.active);
+    let persisted_after_self_remove: chat_core::state::PersistedClientState =
+        serde_json::from_slice(&svc.export_client_state().expect("export"))
+            .expect("decode persisted");
+    let self_removed_group = persisted_after_self_remove
+        .groups
+        .iter()
+        .find(|g| g.group_state.group_id.value == gid.value)
+        .expect("group exists");
+    assert_eq!(self_removed_group.self_leaf_index, None);
 
     svc.clear_pending_commit(gid.clone())
         .expect("clear pending from backend");
@@ -214,6 +245,19 @@ fn service_paths_with_script_backend() {
     assert_eq!(msg_events.len(), 1);
     assert_eq!(msg_events[0].kind, EventKind::MessageReceived);
     assert_eq!(msg_events[0].message_plaintext, b"from-backend");
+
+    // Repeat invite/remove to ensure member-map indexes don't collide after holes.
+    let invite_again = svc
+        .invite(InviteRequest {
+            group_id: gid.clone(),
+            invited_client: ClientId {
+                user_id: "other2".to_string(),
+                device_id: "d2".to_string(),
+            },
+            keypackage: vec![2],
+        })
+        .expect("invite after remove");
+    assert!(!invite_again.commit_message.is_empty());
 
     // drop_group local-not-found path after backend succeeds.
     let missing_gid = GroupId {

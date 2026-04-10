@@ -31,6 +31,22 @@ impl Default for MessengerMls {
 }
 
 impl MessengerMls {
+    const MAX_INCOMING_QUEUE: usize = 1024;
+    const MAX_KEY_PACKAGES_PER_CALL: u32 = 4096;
+
+    /// Сравнивает две логические клиентские идентичности.
+    fn same_client(a: &ClientId, b: &ClientId) -> bool {
+        a.user_id == b.user_id && a.device_id == b.device_id
+    }
+
+    /// Проверяет, что идентификатор группы не пустой.
+    fn validate_group_id(group_id: &GroupId) -> MlsResult<()> {
+        if group_id.value.is_empty() {
+            return Err(Error::new(StatusCode::InvalidArgument, "group_id is empty"));
+        }
+        Ok(())
+    }
+
     /// Создаёт сервис с backend по умолчанию [`OpenMlsBackend`].
     pub fn new() -> Self {
         Self {
@@ -79,6 +95,9 @@ impl MessengerMls {
             ));
         }
 
+        // Re-init must not keep groups or key packages from previous identity.
+        self.backend.reset();
+        self.state = RuntimeState::new();
         self.backend.configure_client(&params)?;
         self.state.identity = Some(ClientIdentityState::from(&params));
         Ok(())
@@ -136,6 +155,18 @@ impl MessengerMls {
     /// Возвращает [`StatusCode::InvalidArgument`], если `count == 0`.
     pub fn create_key_packages(&mut self, count: u32) -> MlsResult<KeyPackageBundle> {
         self.require_identity()?;
+        if count == 0 {
+            return Err(Error::new(
+                StatusCode::InvalidArgument,
+                "count must be greater than 0",
+            ));
+        }
+        if count > Self::MAX_KEY_PACKAGES_PER_CALL {
+            return Err(Error::new(
+                StatusCode::InvalidArgument,
+                format!("count must be <= {}", Self::MAX_KEY_PACKAGES_PER_CALL),
+            ));
+        }
         let keypackages = self.backend.create_key_packages(count)?;
 
         for kp in &keypackages {
@@ -158,14 +189,12 @@ impl MessengerMls {
     pub fn mark_key_packages_uploaded(&mut self, bundle: KeyPackageBundle) -> MlsResult<()> {
         let mut missing = 0usize;
         for kp in &bundle.keypackages {
-            if let Some(existing) = self
-                .state
-                .key_packages
-                .iter_mut()
-                .find(|existing| existing.data == *kp)
-            {
+            let mut matched = false;
+            for existing in self.state.key_packages.iter_mut().filter(|x| x.data == *kp) {
                 existing.uploaded = true;
-            } else {
+                matched = true;
+            }
+            if !matched {
                 missing += 1;
             }
         }
@@ -213,22 +242,36 @@ impl MessengerMls {
 
     /// Возвращает снимки всех локально известных групп.
     pub fn list_groups(&self) -> MlsResult<Vec<GroupState>> {
-        Ok(self
+        let mut out: Vec<_> = self
             .state
             .groups
             .values()
             .map(|x| x.group_state.clone())
-            .collect())
+            .collect();
+        out.sort_by(|a, b| a.group_id.value.cmp(&b.group_id.value));
+        Ok(out)
     }
 
     /// Возвращает состояние конкретной группы.
     pub fn get_group_state(&self, group_id: GroupId) -> MlsResult<GroupState> {
+        Self::validate_group_id(&group_id)?;
         self.get_group(&group_id).map(|g| g.group_state.clone())
     }
 
     /// Возвращает список участников, отслеживаемых локальным runtime.
     pub fn list_members(&self, group_id: GroupId) -> MlsResult<Vec<Member>> {
-        self.get_group(&group_id).map(|g| g.members.clone())
+        Self::validate_group_id(&group_id)?;
+        self.get_group(&group_id).map(|g| {
+            let mut members = g.members.clone();
+            members.sort_by(|a, b| {
+                (a.is_self, &a.client_id.user_id, &a.client_id.device_id).cmp(&(
+                    b.is_self,
+                    &b.client_id.user_id,
+                    &b.client_id.device_id,
+                ))
+            });
+            members
+        })
     }
 
     /// Приглашает участника по key package и возвращает артефакты commit.
@@ -239,12 +282,20 @@ impl MessengerMls {
     pub fn invite(&mut self, request: InviteRequest) -> MlsResult<InviteResult> {
         let (group_id, invited_client, keypackage) =
             (request.group_id, request.invited_client, request.keypackage);
+        Self::validate_group_id(&group_id)?;
+        if keypackage.is_empty() {
+            return Err(Error::new(
+                StatusCode::InvalidArgument,
+                "keypackage is empty",
+            ));
+        }
         {
             let group = self.get_group(&group_id)?;
-            if group.members.iter().any(|member| {
-                member.client_id.user_id == invited_client.user_id
-                    && member.client_id.device_id == invited_client.device_id
-            }) {
+            if group
+                .members
+                .iter()
+                .any(|member| Self::same_client(&member.client_id, &invited_client))
+            {
                 return Err(Error::new(
                     StatusCode::AlreadyExists,
                     "invited client is already in group",
@@ -258,7 +309,13 @@ impl MessengerMls {
         group.pending_commit = true;
         Self::apply_snapshot(group, &artifacts.snapshot);
 
-        let next_index = group.member_map.len() as u32;
+        let next_index = group
+            .member_map
+            .keys()
+            .copied()
+            .max()
+            .map(|x| x.saturating_add(1))
+            .unwrap_or(0);
         group.member_map.insert(next_index, invited_client.clone());
         group.members.push(Member {
             client_id: invited_client,
@@ -312,6 +369,7 @@ impl MessengerMls {
     /// Возвращает [`StatusCode::NotFound`], когда целевой участник не найден.
     pub fn remove(&mut self, request: RemoveRequest) -> MlsResult<RemoveResult> {
         let (group_id, removed_client) = (request.group_id, request.removed_client);
+        Self::validate_group_id(&group_id)?;
         let self_id = self.require_identity()?.client_id.clone();
 
         let removed_leaf_index = {
@@ -319,29 +377,31 @@ impl MessengerMls {
             group
                 .member_map
                 .iter()
-                .find(|(_, c)| {
-                    c.user_id == removed_client.user_id && c.device_id == removed_client.device_id
-                })
+                .find(|(_, c)| Self::same_client(c, &removed_client))
                 .map(|(leaf, _)| *leaf)
         };
+        if removed_leaf_index.is_none() {
+            return Err(Error::new(
+                StatusCode::NotFound,
+                "removed client is not present in group member map",
+            ));
+        }
 
         let artifacts = self.backend.remove(&group_id, removed_leaf_index)?;
         let group = self.get_group_mut(&group_id)?;
 
         group.pending_commit = true;
         Self::apply_snapshot(group, &artifacts.snapshot);
-        group.members.retain(|m| {
-            m.client_id.user_id != removed_client.user_id
-                || m.client_id.device_id != removed_client.device_id
-        });
-        group.member_map.retain(|_, c| {
-            c.user_id != removed_client.user_id || c.device_id != removed_client.device_id
-        });
+        group
+            .members
+            .retain(|m| !Self::same_client(&m.client_id, &removed_client));
+        group
+            .member_map
+            .retain(|_, c| !Self::same_client(c, &removed_client));
 
-        if removed_client.user_id == self_id.user_id
-            && removed_client.device_id == self_id.device_id
-        {
+        if Self::same_client(&removed_client, &self_id) {
             group.group_state.active = false;
+            group.self_leaf_index = None;
         }
 
         Ok(RemoveResult {
@@ -352,6 +412,7 @@ impl MessengerMls {
 
     /// Выполняет self-update для локального leaf в группе.
     pub fn self_update(&mut self, group_id: GroupId) -> MlsResult<SelfUpdateResult> {
+        Self::validate_group_id(&group_id)?;
         let artifacts = self.backend.self_update(&group_id)?;
         let group = self.get_group_mut(&group_id)?;
 
@@ -373,6 +434,7 @@ impl MessengerMls {
         plaintext: Bytes,
         aad: Bytes,
     ) -> MlsResult<Bytes> {
+        Self::validate_group_id(&group_id)?;
         self.get_group(&group_id)?;
         self.backend.encrypt(&group_id, &plaintext, &aad)
     }
@@ -404,6 +466,9 @@ impl MessengerMls {
                     let group = self.get_group_mut(&group_id)?;
                     group.transport_last_offset = group.transport_last_offset.saturating_add(1);
                     group.incoming_queue.push_back(message.clone());
+                    while group.incoming_queue.len() > Self::MAX_INCOMING_QUEUE {
+                        let _ = group.incoming_queue.pop_front();
+                    }
                 }
 
                 if let Some(plaintext) = plaintext {
@@ -423,6 +488,7 @@ impl MessengerMls {
 
     /// Возвращает, есть ли у группы pending commit (локальный или backend).
     pub fn has_pending_commit(&self, group_id: GroupId) -> MlsResult<bool> {
+        Self::validate_group_id(&group_id)?;
         let local = self.get_group(&group_id).map(|g| g.pending_commit)?;
         if local {
             return Ok(true);
@@ -432,6 +498,8 @@ impl MessengerMls {
 
     /// Очищает состояние pending commit в backend и локальном runtime.
     pub fn clear_pending_commit(&mut self, group_id: GroupId) -> MlsResult<()> {
+        Self::validate_group_id(&group_id)?;
+        self.get_group(&group_id)?;
         self.backend.clear_pending_commit(&group_id)?;
         let group = self.get_group_mut(&group_id)?;
         group.pending_commit = false;
@@ -441,11 +509,13 @@ impl MessengerMls {
 
     /// Удаляет группу из backend и локальных runtime-карт.
     pub fn drop_group(&mut self, group_id: GroupId) -> MlsResult<()> {
-        self.backend.drop_group(&group_id)?;
+        Self::validate_group_id(&group_id)?;
         let key = to_group_key(&group_id.value);
-        if self.state.groups.remove(&key).is_none() {
+        if !self.state.groups.contains_key(&key) {
             return Err(Error::new(StatusCode::NotFound, "group not found"));
         }
+        self.backend.drop_group(&group_id)?;
+        let _ = self.state.groups.remove(&key);
         Ok(())
     }
 
@@ -480,6 +550,7 @@ impl MessengerMls {
         group.group_state.epoch = snapshot.epoch;
         group.group_state.active = snapshot.active;
         group.group_state.serialized_state = snapshot.serialized_state.clone();
+        group.ratchet_tree_cache = snapshot.serialized_state.clone();
         group.secret_material = snapshot.secret_material.clone();
         group.self_leaf_index = snapshot.self_leaf_index;
     }
@@ -682,6 +753,18 @@ mod tests {
     }
 
     #[test]
+    fn create_key_packages_rejects_too_large_count() {
+        let mut service = MessengerMls::with_backend(Box::new(MockBackend::default()));
+        service
+            .create_client(make_params("alice", "phone"))
+            .expect("create");
+        let err = service
+            .create_key_packages(MessengerMls::MAX_KEY_PACKAGES_PER_CALL + 1)
+            .expect_err("too large count");
+        assert_eq!(err.code, StatusCode::InvalidArgument);
+    }
+
+    #[test]
     fn invite_rejects_duplicate_member_without_backend_call() {
         let configure_calls = Arc::new(AtomicUsize::new(0));
         let invite_calls = Arc::new(AtomicUsize::new(0));
@@ -711,6 +794,32 @@ mod tests {
             .expect_err("duplicate invite should fail");
         assert_eq!(err.code, StatusCode::AlreadyExists);
         assert_eq!(invite_calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn invite_rejects_empty_keypackage() {
+        let mut service = MessengerMls::with_backend(Box::new(MockBackend::default()));
+        service
+            .create_client(make_params("alice", "phone"))
+            .expect("create");
+        service
+            .create_group(GroupId {
+                value: b"group-a".to_vec(),
+            })
+            .expect("group");
+        let err = service
+            .invite(InviteRequest {
+                group_id: GroupId {
+                    value: b"group-a".to_vec(),
+                },
+                invited_client: ClientId {
+                    user_id: "bob".to_string(),
+                    device_id: "phone".to_string(),
+                },
+                keypackage: Vec::new(),
+            })
+            .expect_err("empty keypackage");
+        assert_eq!(err.code, StatusCode::InvalidArgument);
     }
 
     #[test]
@@ -887,5 +996,171 @@ mod tests {
             .expect("group exists in persisted state");
         assert_eq!(group.transport_last_offset, 1);
         assert_eq!(group.incoming_queue.len(), 1);
+    }
+
+    #[test]
+    fn create_client_reinitialization_clears_runtime_state() {
+        let mut service = MessengerMls::with_backend(Box::new(MockBackend::default()));
+        service
+            .create_client(make_params("alice", "phone"))
+            .expect("first create");
+        service
+            .create_group(GroupId {
+                value: b"g-reset".to_vec(),
+            })
+            .expect("group created");
+        let _ = service.create_key_packages(2).expect("kps");
+
+        service
+            .create_client(make_params("bob", "laptop"))
+            .expect("recreate resets state");
+
+        assert!(service.list_groups().expect("list").is_empty());
+        let exported = service.export_client_state().expect("export");
+        let persisted: PersistedClientState = serde_json::from_slice(&exported).expect("decode");
+        assert!(persisted.key_packages.is_empty());
+        assert_eq!(persisted.key_package_counter, 0);
+        assert_eq!(
+            persisted.identity.expect("identity").client_id.user_id,
+            "bob".to_string()
+        );
+    }
+
+    #[test]
+    fn api_rejects_empty_group_id_consistently() {
+        let mut service = MessengerMls::with_backend(Box::new(MockBackend::default()));
+        service
+            .create_client(make_params("alice", "phone"))
+            .expect("create client");
+        let empty = GroupId { value: Vec::new() };
+
+        assert_eq!(
+            service
+                .get_group_state(empty.clone())
+                .expect_err("empty group id")
+                .code,
+            StatusCode::InvalidArgument
+        );
+        assert_eq!(
+            service
+                .list_members(empty.clone())
+                .expect_err("empty group id")
+                .code,
+            StatusCode::InvalidArgument
+        );
+        assert_eq!(
+            service
+                .self_update(empty.clone())
+                .expect_err("empty group id")
+                .code,
+            StatusCode::InvalidArgument
+        );
+        assert_eq!(
+            service
+                .encrypt_message(empty.clone(), vec![1], vec![])
+                .expect_err("empty group id")
+                .code,
+            StatusCode::InvalidArgument
+        );
+        assert_eq!(
+            service
+                .has_pending_commit(empty.clone())
+                .expect_err("empty group id")
+                .code,
+            StatusCode::InvalidArgument
+        );
+        assert_eq!(
+            service
+                .clear_pending_commit(empty.clone())
+                .expect_err("empty group id")
+                .code,
+            StatusCode::InvalidArgument
+        );
+        assert_eq!(
+            service.drop_group(empty).expect_err("empty group id").code,
+            StatusCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn incoming_queue_is_bounded() {
+        let mut service = MessengerMls::with_backend(Box::new(MockBackend::default()));
+        let gid = GroupId {
+            value: b"queue-bounded".to_vec(),
+        };
+        service
+            .create_client(make_params("queue-user", "phone"))
+            .expect("create client");
+        service.create_group(gid.clone()).expect("create group");
+
+        let mut producer = MessengerMls::new();
+        producer
+            .create_client(make_params("producer-user", "phone"))
+            .expect("producer client");
+        producer.create_group(gid.clone()).expect("producer group");
+        let payload = producer
+            .encrypt_message(gid.clone(), b"payload".to_vec(), b"aad".to_vec())
+            .expect("producer encrypt");
+
+        for _ in 0..(MessengerMls::MAX_INCOMING_QUEUE + 16) {
+            let _ = service
+                .handle_incoming(IncomingMessage {
+                    kind: IncomingMessageKind::GroupMessage,
+                    payload: payload.clone(),
+                })
+                .expect("incoming handled");
+        }
+
+        let exported = service.export_client_state().expect("export state");
+        let persisted: PersistedClientState =
+            serde_json::from_slice(&exported).expect("decode persisted");
+        let group = persisted
+            .groups
+            .into_iter()
+            .find(|g| g.group_state.group_id.value == gid.value)
+            .expect("group exists");
+        assert_eq!(
+            group.transport_last_offset,
+            (MessengerMls::MAX_INCOMING_QUEUE + 16) as u64
+        );
+        assert_eq!(group.incoming_queue.len(), MessengerMls::MAX_INCOMING_QUEUE);
+    }
+
+    #[test]
+    fn list_members_is_stable_and_sorted() {
+        let mut service = MessengerMls::with_backend(Box::new(MockBackend::default()));
+        let gid = GroupId {
+            value: b"members-sorted".to_vec(),
+        };
+        service
+            .create_client(make_params("self", "phone"))
+            .expect("create");
+        service.create_group(gid.clone()).expect("group");
+        let _ = service
+            .invite(InviteRequest {
+                group_id: gid.clone(),
+                invited_client: ClientId {
+                    user_id: "zzz".to_string(),
+                    device_id: "1".to_string(),
+                },
+                keypackage: vec![1],
+            })
+            .expect("invite z");
+        let _ = service
+            .invite(InviteRequest {
+                group_id: gid.clone(),
+                invited_client: ClientId {
+                    user_id: "aaa".to_string(),
+                    device_id: "1".to_string(),
+                },
+                keypackage: vec![2],
+            })
+            .expect("invite a");
+
+        let members = service.list_members(gid).expect("members");
+        assert_eq!(members.len(), 3);
+        assert_eq!(members[0].client_id.user_id, "aaa");
+        assert_eq!(members[1].client_id.user_id, "zzz");
+        assert_eq!(members[2].client_id.user_id, "self");
     }
 }
