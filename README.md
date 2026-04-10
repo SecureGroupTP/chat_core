@@ -2,6 +2,9 @@
 
 Rust-библиотека с C ABI фасадом для MLS-клиента мессенджера.
 
+- Подробный Flutter/FFI гайд по интеграции и обновлению из GitHub Releases:
+  - `GUIDE.md`
+
 ## Зависимости
 
 Для локальной разработки и запуска команд из `justfile` нужны:
@@ -39,6 +42,8 @@ just tooling-install
 
 ## Документация
 
+- Публичная документация (GitHub Pages):
+  - https://securegrouptp.github.io/chat_core/chat_core/index.html
 - Сгенерировать публичную HTML-документацию:
   - `just doc`
 - Сгенерировать расширенную документацию, включая private items:
