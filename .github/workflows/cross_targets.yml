@@ -2,12 +2,8 @@ name: Cross Targets
 
 on:
   push:
-    branches:
-      - master
     tags:
       - 'v*'
-  pull_request:
-  workflow_dispatch:
 
 env:
   RUST_VERSION: "1.93.1"
