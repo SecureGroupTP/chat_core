@@ -1,0 +1,136 @@
+name: Cross Targets
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+  workflow_dispatch:
+
+env:
+  RUST_VERSION: "1.93.1"
+  JUST_VERSION: "1.40.0"
+  ZIG_VERSION: "0.14.1"
+  CARGO_ZIGBUILD_VERSION: "0.22.1"
+  CARGO_NDK_VERSION: "4.1.2"
+  ANDROID_NDK_VERSION: "26.3.11579264"
+
+jobs:
+  linux-windows-cross:
+    name: Linux/Windows (${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - armv7-unknown-linux-gnueabihf
+          - x86_64-pc-windows-gnu
+          - aarch64-pc-windows-gnullvm
+
+    defaults:
+      run:
+        working-directory: chat_core
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt,clippy
+          target: ${{ matrix.target }}
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Install just/cargo-zigbuild
+        run: |
+          cargo install --locked just --version "${JUST_VERSION}"
+          cargo install --locked cargo-zigbuild --version "${CARGO_ZIGBUILD_VERSION}"
+
+      - name: Build static library
+        run: cargo zigbuild --release --target "${{ matrix.target }}" --lib
+
+      - name: Package artifact
+        run: |
+          mkdir -p dist
+          find "target/${{ matrix.target }}/release" -maxdepth 1 -type f \
+            \( -name "libchat_core.a" -o -name "chat_core.lib" \) \
+            -exec cp {} dist/ \;
+          ls -la dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat_core-${{ matrix.target }}
+          path: chat_core/dist/*
+          if-no-files-found: error
+
+  android-cross:
+    name: Android (${{ matrix.android_abi }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - android_abi: arm64-v8a
+            rust_target: aarch64-linux-android
+          - android_abi: armeabi-v7a
+            rust_target: armv7-linux-androideabi
+          - android_abi: x86_64
+            rust_target: x86_64-linux-android
+
+    defaults:
+      run:
+        working-directory: chat_core
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt,clippy
+          target: ${{ matrix.rust_target }}
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK (pinned)
+        run: sdkmanager "ndk;${ANDROID_NDK_VERSION}"
+
+      - name: Export Android NDK env
+        run: |
+          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Install just/cargo-ndk
+        run: |
+          cargo install --locked just --version "${JUST_VERSION}"
+          cargo install --locked cargo-ndk --version "${CARGO_NDK_VERSION}"
+
+      - name: Build static library
+        run: cargo ndk -t "${{ matrix.android_abi }}" build --release --lib
+
+      - name: Package artifact
+        run: |
+          mkdir -p dist
+          find "target/${{ matrix.rust_target }}/release" -maxdepth 1 -type f -name "libchat_core.a" -exec cp {} dist/ \;
+          ls -la dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat_core-${{ matrix.rust_target }}
+          path: chat_core/dist/*
+          if-no-files-found: error

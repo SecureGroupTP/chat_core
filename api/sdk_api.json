@@ -1,0 +1,139 @@
+{
+  "namespace": "MessengerMls",
+  "ffi_header": "messenger_mls.h",
+  "operations": [
+    {
+      "name": "create_client",
+      "ffi_name": "messenger_mls_create_client",
+      "input": "json",
+      "output": "void",
+      "doc": "Create and configure a local MLS client from JSON-serialized CreateClientParams."
+    },
+    {
+      "name": "restore_client",
+      "ffi_name": "messenger_mls_restore_client",
+      "input": "bytes",
+      "output": "void",
+      "doc": "Restore previously exported client state bytes."
+    },
+    {
+      "name": "export_client_state",
+      "ffi_name": "messenger_mls_export_client_state",
+      "input": "none",
+      "output": "bytes",
+      "doc": "Export client state as opaque bytes for persistence."
+    },
+    {
+      "name": "get_client_id",
+      "ffi_name": "messenger_mls_get_client_id",
+      "input": "none",
+      "output": "json",
+      "doc": "Return current client id JSON."
+    },
+    {
+      "name": "create_key_packages",
+      "ffi_name": "messenger_mls_create_key_packages",
+      "input": "u32",
+      "output": "json",
+      "doc": "Generate key packages and return JSON KeyPackageBundle."
+    },
+    {
+      "name": "mark_key_packages_uploaded",
+      "ffi_name": "messenger_mls_mark_key_packages_uploaded",
+      "input": "json",
+      "output": "void",
+      "doc": "Mark generated key packages as uploaded using JSON KeyPackageBundle."
+    },
+    {
+      "name": "create_group",
+      "ffi_name": "messenger_mls_create_group",
+      "input": "json",
+      "output": "json",
+      "doc": "Create a group from JSON GroupId and return JSON GroupState."
+    },
+    {
+      "name": "list_groups",
+      "ffi_name": "messenger_mls_list_groups",
+      "input": "none",
+      "output": "json",
+      "doc": "Return JSON array of GroupState objects."
+    },
+    {
+      "name": "get_group_state",
+      "ffi_name": "messenger_mls_get_group_state",
+      "input": "json",
+      "output": "json",
+      "doc": "Return JSON GroupState for provided JSON GroupId."
+    },
+    {
+      "name": "list_members",
+      "ffi_name": "messenger_mls_list_members",
+      "input": "json",
+      "output": "json",
+      "doc": "Return JSON array of group members for JSON GroupId."
+    },
+    {
+      "name": "invite",
+      "ffi_name": "messenger_mls_invite",
+      "input": "json",
+      "output": "json",
+      "doc": "Invite a member using JSON InviteRequest and return JSON InviteResult."
+    },
+    {
+      "name": "join_from_welcome",
+      "ffi_name": "messenger_mls_join_from_welcome",
+      "input": "bytes",
+      "output": "json",
+      "doc": "Join from raw welcome message bytes and return JSON GroupState."
+    },
+    {
+      "name": "remove",
+      "ffi_name": "messenger_mls_remove",
+      "input": "json",
+      "output": "json",
+      "doc": "Remove a member using JSON RemoveRequest and return JSON RemoveResult."
+    },
+    {
+      "name": "self_update",
+      "ffi_name": "messenger_mls_self_update",
+      "input": "json",
+      "output": "json",
+      "doc": "Run self-update for JSON GroupId and return JSON SelfUpdateResult."
+    },
+    {
+      "name": "encrypt_message",
+      "ffi_name": "messenger_mls_encrypt_message",
+      "input": "json",
+      "output": "json",
+      "doc": "Encrypt application message from JSON request and return JSON-encoded ciphertext bytes."
+    },
+    {
+      "name": "handle_incoming",
+      "ffi_name": "messenger_mls_handle_incoming",
+      "input": "json",
+      "output": "json",
+      "doc": "Handle incoming message JSON and return JSON Event."
+    },
+    {
+      "name": "has_pending_commit",
+      "ffi_name": "messenger_mls_has_pending_commit",
+      "input": "json",
+      "output": "json",
+      "doc": "Return JSON boolean pending-commit state for JSON GroupId."
+    },
+    {
+      "name": "clear_pending_commit",
+      "ffi_name": "messenger_mls_clear_pending_commit",
+      "input": "json",
+      "output": "void",
+      "doc": "Clear pending commit for JSON GroupId."
+    },
+    {
+      "name": "drop_group",
+      "ffi_name": "messenger_mls_drop_group",
+      "input": "json",
+      "output": "void",
+      "doc": "Drop local group state for JSON GroupId."
+    }
+  ]
+}

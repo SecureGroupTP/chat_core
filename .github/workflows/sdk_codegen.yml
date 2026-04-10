@@ -1,0 +1,48 @@
+name: SDK Codegen
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  sdk-verify:
+    runs-on: ubuntu-24.04
+    env:
+      RUST_VERSION: "1.93.1"
+      GO_VERSION: "1.23.0"
+      DART_VERSION: "3.11.4"
+      JUST_VERSION: "1.40.0"
+    defaults:
+      run:
+        working-directory: chat_core
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt,clippy
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Dart
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: ${{ env.DART_VERSION }}
+
+      - name: Install just (pinned)
+        run: cargo install --locked just --version "${JUST_VERSION}"
+
+      - name: Verify SDK generation
+        run: just sdk-verify
