@@ -18,17 +18,22 @@ env:
 
 jobs:
   linux-windows-cross:
-    name: Linux/Windows (${{ matrix.target }})
+    name: Linux/Windows (${{ matrix.asset_name }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-          - aarch64-unknown-linux-gnu
-          - armv7-unknown-linux-gnueabihf
-          - x86_64-pc-windows-gnu
-          - aarch64-pc-windows-gnullvm
+        include:
+          - target: x86_64-unknown-linux-gnu
+            asset_name: linux-amd64
+          - target: aarch64-unknown-linux-gnu
+            asset_name: linux-arm64
+          - target: armv7-unknown-linux-gnueabihf
+            asset_name: linux-armv7
+          - target: x86_64-pc-windows-gnu
+            asset_name: windows-amd64
+          - target: aarch64-pc-windows-gnullvm
+            asset_name: windows-arm64
 
     steps:
       - name: Checkout
@@ -59,17 +64,17 @@ jobs:
           mkdir -p dist
           release_dir="target/${{ matrix.target }}/release"
           if [ -f "${release_dir}/libchat_core.a" ]; then
-            cp "${release_dir}/libchat_core.a" "dist/chat_core-${{ matrix.target }}.a"
+            cp "${release_dir}/libchat_core.a" "dist/chat_core-${{ matrix.asset_name }}.a"
           fi
           if [ -f "${release_dir}/chat_core.lib" ]; then
-            cp "${release_dir}/chat_core.lib" "dist/chat_core-${{ matrix.target }}.lib"
+            cp "${release_dir}/chat_core.lib" "dist/chat_core-${{ matrix.asset_name }}.lib"
           fi
           ls -la dist
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: chat_core-${{ matrix.target }}
+          name: chat_core-${{ matrix.asset_name }}
           path: dist/*
           if-no-files-found: error
 
@@ -79,7 +84,7 @@ jobs:
           files: dist/*
 
   android-cross:
-    name: Android (${{ matrix.android_abi }})
+    name: Android (${{ matrix.asset_name }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -87,10 +92,13 @@ jobs:
         include:
           - android_abi: arm64-v8a
             rust_target: aarch64-linux-android
+            asset_name: android-arm64
           - android_abi: armeabi-v7a
             rust_target: armv7-linux-androideabi
+            asset_name: android-armv7
           - android_abi: x86_64
             rust_target: x86_64-linux-android
+            asset_name: android-amd64
 
     steps:
       - name: Checkout
@@ -125,13 +133,77 @@ jobs:
       - name: Package artifact
         run: |
           mkdir -p dist
-          cp "target/${{ matrix.rust_target }}/release/libchat_core.a" "dist/chat_core-${{ matrix.rust_target }}.a"
+          cp "target/${{ matrix.rust_target }}/release/libchat_core.a" "dist/chat_core-${{ matrix.asset_name }}.a"
           ls -la dist
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: chat_core-${{ matrix.rust_target }}
+          name: chat_core-${{ matrix.asset_name }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+
+  windows-msvc:
+    name: Windows MSVC (${{ matrix.asset_name }})
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rust_target: x86_64-pc-windows-msvc
+            asset_name: windows-msvc-amd64
+          - rust_target: aarch64-pc-windows-msvc
+            asset_name: windows-msvc-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt,clippy
+          target: ${{ matrix.rust_target }}
+
+      - name: Build Windows artifacts (MSVC)
+        run: cargo build --release --target "${{ matrix.rust_target }}" --lib
+
+      - name: Package artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          $releaseDir = "target/${{ matrix.rust_target }}/release"
+          $copied = @()
+
+          if (Test-Path "$releaseDir/chat_core.dll") {
+            Copy-Item "$releaseDir/chat_core.dll" "dist/chat_core-${{ matrix.asset_name }}.dll"
+            $copied += "dll"
+          }
+          if (Test-Path "$releaseDir/chat_core.lib") {
+            Copy-Item "$releaseDir/chat_core.lib" "dist/chat_core-${{ matrix.asset_name }}.lib"
+            $copied += "lib"
+          }
+          if (Test-Path "$releaseDir/chat_core.dll.lib") {
+            Copy-Item "$releaseDir/chat_core.dll.lib" "dist/chat_core-${{ matrix.asset_name }}.dll.lib"
+            $copied += "dll.lib"
+          }
+
+          if ($copied.Count -eq 0) {
+            Write-Error "No MSVC artifacts found in $releaseDir"
+          }
+
+          Get-ChildItem dist | Format-Table -AutoSize
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat_core-${{ matrix.asset_name }}
           path: dist/*
           if-no-files-found: error
 

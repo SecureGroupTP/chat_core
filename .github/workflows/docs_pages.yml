@@ -42,19 +42,19 @@ jobs:
       - name: Add root index redirect
         run: |
           if [ ! -f target/doc/index.html ]; then
-            cat > target/doc/index.html <<'HTML'
-            <!doctype html>
-            <html lang="en">
-            <head>
-              <meta charset="utf-8" />
-              <meta http-equiv="refresh" content="0; url=./chat_core/index.html" />
-              <title>chat_core docs</title>
-            </head>
-            <body>
-              <p>Redirecting to <a href="./chat_core/index.html">chat_core documentation</a>...</p>
-            </body>
-            </html>
-            HTML
+            printf '%s\n' \
+              '<!doctype html>' \
+              '<html lang="en">' \
+              '<head>' \
+              '  <meta charset="utf-8" />' \
+              '  <meta http-equiv="refresh" content="0; url=./chat_core/index.html" />' \
+              '  <title>chat_core docs</title>' \
+              '</head>' \
+              '<body>' \
+              '  <p>Redirecting to <a href="./chat_core/index.html">chat_core documentation</a>...</p>' \
+              '</body>' \
+              '</html>' \
+              > target/doc/index.html
           fi
 
       - name: Configure Pages
