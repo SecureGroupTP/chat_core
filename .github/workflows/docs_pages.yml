@@ -2,6 +2,8 @@ name: Rust Docs Pages
 
 on:
   push:
+    branches:
+      - master
     tags:
       - 'v*'
   workflow_dispatch:
@@ -41,6 +43,24 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: just doc
 
+      - name: Add root index redirect
+        run: |
+          if [ ! -f target/doc/index.html ]; then
+            cat > target/doc/index.html <<'HTML'
+            <!doctype html>
+            <html lang="en">
+            <head>
+              <meta charset="utf-8" />
+              <meta http-equiv="refresh" content="0; url=./chat_core/index.html" />
+              <title>chat_core docs</title>
+            </head>
+            <body>
+              <p>Redirecting to <a href="./chat_core/index.html">chat_core documentation</a>...</p>
+            </body>
+            </html>
+            HTML
+          fi
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
@@ -52,6 +72,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-24.04
+    if: github.ref == 'refs/heads/master'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

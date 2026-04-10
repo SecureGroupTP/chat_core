@@ -35,6 +35,10 @@ check:
 test:
     cargo test --workspace --all-targets --all-features
 
+[doc("Show current test coverage summary in terminal (no report files).")]
+cov:
+    cargo llvm-cov --workspace --all-targets --all-features --summary-only
+
 [doc("Run the default binary.")]
 run:
     cargo run
