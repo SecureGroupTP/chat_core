@@ -8,7 +8,7 @@ on:
 env:
   RUST_VERSION: "1.93.1"
   JUST_VERSION: "1.40.0"
-  ZIG_VERSION: "0.14.1"
+  ZIG_VERSION: "0.14.0"
   CARGO_ZIGBUILD_VERSION: "0.22.1"
   CARGO_NDK_VERSION: "4.1.2"
   ANDROID_NDK_VERSION: "26.3.11579264"
@@ -26,10 +26,6 @@ jobs:
           - armv7-unknown-linux-gnueabihf
           - x86_64-pc-windows-gnu
           - aarch64-pc-windows-gnullvm
-
-    defaults:
-      run:
-        working-directory: chat_core
 
     steps:
       - name: Checkout
@@ -67,7 +63,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: chat_core-${{ matrix.target }}
-          path: chat_core/dist/*
+          path: dist/*
           if-no-files-found: error
 
   android-cross:
@@ -83,10 +79,6 @@ jobs:
             rust_target: armv7-linux-androideabi
           - android_abi: x86_64
             rust_target: x86_64-linux-android
-
-    defaults:
-      run:
-        working-directory: chat_core
 
     steps:
       - name: Checkout
@@ -128,5 +120,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: chat_core-${{ matrix.rust_target }}
-          path: chat_core/dist/*
+          path: dist/*
           if-no-files-found: error

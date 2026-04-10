@@ -107,7 +107,7 @@ Workflow GitHub Actions:
 - Файл: `.github/workflows/cross_targets.yml`
 - Платформы: Android (arm64/arm32/amd64), Windows (amd64/arm64), Linux (amd64/arm64/arm32)
 - Runner-ы: `ubuntu-24.04`
-- Пинning версий tooling: Rust `1.93.1`, just `1.40.0`, Zig `0.14.1`, cargo-zigbuild `0.22.1`, cargo-ndk `4.1.2`, Android NDK `26.3.11579264`
+- Пинning версий tooling: Rust `1.93.1`, just `1.40.0`, Zig `0.14.0`, cargo-zigbuild `0.22.1`, cargo-ndk `4.1.2`, Android NDK `26.3.11579264`
 
 ## Текущее состояние
 
