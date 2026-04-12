@@ -44,7 +44,7 @@ dependencies:
 hooks:
   user_defines:
     sgtp_chat_core:
-      release_tag: v0.0.8
+      release_tag: v0.0.9
       github_owner: SecureGroupTP
       github_repo: chat_core
       allow_static_linking: false
