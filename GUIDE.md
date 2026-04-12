@@ -25,6 +25,36 @@
 
 ## 3. Базовая интеграция в Flutter
 
+## 3.0. Готовый Flutter package
+
+В репозитории есть готовый пакет:
+
+- `flutter/sgtp_chat_core`
+
+После пуша его можно подключать из Flutter-приложения напрямую:
+
+```yaml
+dependencies:
+  sgtp_chat_core:
+    git:
+      url: https://github.com/SecureGroupTP/chat_core.git
+      ref: master
+      path: flutter/sgtp_chat_core
+
+hooks:
+  user_defines:
+    sgtp_chat_core:
+      release_tag: v0.0.8
+      github_owner: SecureGroupTP
+      github_repo: chat_core
+      allow_static_linking: false
+```
+
+Пакет использует `hook/build.dart`: во время Flutter native build он берёт
+подходящий бинарный asset из GitHub Release. Если динамического asset ещё нет,
+а пакет подключён из локального checkout-а `chat_core`, hook может собрать
+локальный `cdylib` через `cargo build --release --lib`.
+
 ## 3.1. Добавить FFI-зависимость
 
 В `pubspec.yaml`:

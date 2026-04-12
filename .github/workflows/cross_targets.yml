@@ -56,18 +56,27 @@ jobs:
           cargo install --locked just --version "${JUST_VERSION}"
           cargo install --locked cargo-zigbuild --version "${CARGO_ZIGBUILD_VERSION}"
 
-      - name: Build static library
+      - name: Build native library
         run: cargo zigbuild --release --target "${{ matrix.target }}" --lib
 
       - name: Package artifact
         run: |
           mkdir -p dist
           release_dir="target/${{ matrix.target }}/release"
+          if [ -f "${release_dir}/libchat_core.so" ]; then
+            cp "${release_dir}/libchat_core.so" "dist/chat_core-${{ matrix.asset_name }}.so"
+          fi
+          if [ -f "${release_dir}/chat_core.dll" ]; then
+            cp "${release_dir}/chat_core.dll" "dist/chat_core-${{ matrix.asset_name }}.dll"
+          fi
           if [ -f "${release_dir}/libchat_core.a" ]; then
             cp "${release_dir}/libchat_core.a" "dist/chat_core-${{ matrix.asset_name }}.a"
           fi
           if [ -f "${release_dir}/chat_core.lib" ]; then
             cp "${release_dir}/chat_core.lib" "dist/chat_core-${{ matrix.asset_name }}.lib"
+          fi
+          if [ -f "${release_dir}/libchat_core.dll.a" ]; then
+            cp "${release_dir}/libchat_core.dll.a" "dist/chat_core-${{ matrix.asset_name }}.dll.a"
           fi
           ls -la dist
 
@@ -127,13 +136,19 @@ jobs:
           cargo install --locked just --version "${JUST_VERSION}"
           cargo install --locked cargo-ndk --version "${CARGO_NDK_VERSION}"
 
-      - name: Build static library
+      - name: Build native library
         run: cargo ndk -t "${{ matrix.android_abi }}" build --release --lib
 
       - name: Package artifact
         run: |
           mkdir -p dist
-          cp "target/${{ matrix.rust_target }}/release/libchat_core.a" "dist/chat_core-${{ matrix.asset_name }}.a"
+          release_dir="target/${{ matrix.rust_target }}/release"
+          if [ -f "${release_dir}/libchat_core.so" ]; then
+            cp "${release_dir}/libchat_core.so" "dist/chat_core-${{ matrix.asset_name }}.so"
+          fi
+          if [ -f "${release_dir}/libchat_core.a" ]; then
+            cp "${release_dir}/libchat_core.a" "dist/chat_core-${{ matrix.asset_name }}.a"
+          fi
           ls -la dist
 
       - name: Upload artifact
