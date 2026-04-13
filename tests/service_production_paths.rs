@@ -89,6 +89,11 @@ impl MlsBackend for ScriptBackend {
         Ok(self.pending)
     }
 
+    fn merge_pending_commit(&mut self, group_id: &GroupId) -> MlsResult<GroupSnapshot> {
+        self.pending = false;
+        Ok(Self::snapshot(group_id))
+    }
+
     fn clear_pending_commit(&mut self, _group_id: &GroupId) -> MlsResult<()> {
         self.pending = false;
         Ok(())

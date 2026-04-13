@@ -496,7 +496,22 @@ impl MessengerMls {
         self.backend.has_pending_commit(&group_id)
     }
 
+    /// Завершает нормальный lifecycle pending commit через merge в backend.
+    pub fn merge_pending_commit(&mut self, group_id: GroupId) -> MlsResult<GroupState> {
+        Self::validate_group_id(&group_id)?;
+        self.get_group(&group_id)?;
+        let snapshot = self.backend.merge_pending_commit(&group_id)?;
+        let group = self.get_group_mut(&group_id)?;
+        group.pending_commit = false;
+        group.staged_state = None;
+        Self::apply_snapshot(group, &snapshot);
+        Ok(group.group_state.clone())
+    }
+
     /// Очищает состояние pending commit в backend и локальном runtime.
+    ///
+    /// Это recovery/debug API для аварийного сброса несмерженного commit, а не
+    /// штатный путь завершения перехода epoch.
     pub fn clear_pending_commit(&mut self, group_id: GroupId) -> MlsResult<()> {
         Self::validate_group_id(&group_id)?;
         self.get_group(&group_id)?;
@@ -691,6 +706,10 @@ mod tests {
 
         fn has_pending_commit(&self, _group_id: &GroupId) -> MlsResult<bool> {
             Ok(false)
+        }
+
+        fn merge_pending_commit(&mut self, group_id: &GroupId) -> MlsResult<GroupSnapshot> {
+            Ok(Self::snapshot(group_id))
         }
 
         fn clear_pending_commit(&mut self, _group_id: &GroupId) -> MlsResult<()> {
@@ -891,6 +910,8 @@ mod tests {
             .handle_incoming(&IncomingMessage::default())
             .unwrap();
         assert!(!backend.has_pending_commit(&group_id).unwrap());
+        let merged = backend.merge_pending_commit(&group_id).unwrap();
+        assert_eq!(merged.epoch, 1);
         backend.clear_pending_commit(&group_id).unwrap();
         backend.drop_group(&group_id).unwrap();
     }

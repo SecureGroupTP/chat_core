@@ -1,6 +1,6 @@
 use chat_core::{
-    ClientId, CreateClientParams, DeviceBinding, GroupId, IncomingMessage, IncomingMessageKind,
-    InviteRequest, MessengerMls, StatusCode,
+    ClientId, CreateClientParams, DeviceBinding, EventKind, GroupId, IncomingMessage,
+    IncomingMessageKind, InviteRequest, MessengerMls, StatusCode,
 };
 
 fn make_params(user: &str, device: &str, seed: u8) -> CreateClientParams {
@@ -23,7 +23,7 @@ fn make_params(user: &str, device: &str, seed: u8) -> CreateClientParams {
 }
 
 #[test]
-fn invite_join_then_app_message_hits_known_generation_limit() {
+fn invite_join_then_app_message_delivers_after_inviter_merges_pending_commit() {
     let mut alice = MessengerMls::new();
     let mut bob = MessengerMls::new();
 
@@ -63,38 +63,31 @@ fn invite_join_then_app_message_hits_known_generation_limit() {
     bob.join_from_welcome(&invite.welcome_message)
         .expect("bob join from welcome");
 
+    let merged_state = alice
+        .merge_pending_commit(group_id.clone())
+        .expect("alice merges pending invite commit");
+    assert_eq!(merged_state.epoch, 1);
+    assert!(
+        !alice
+            .has_pending_commit(group_id.clone())
+            .expect("pending commit after merge"),
+        "pending commit should be cleared after merge"
+    );
+
     let ciphertext = alice
         .encrypt_message(group_id.clone(), b"hello bob".to_vec(), b"aad-1".to_vec())
         .expect("encrypt message");
 
-    let err = bob
+    let events = bob
         .handle_incoming(IncomingMessage {
             kind: IncomingMessageKind::GroupMessage,
             payload: ciphertext,
         })
-        .expect_err("known limitation: generation mismatch after invite/join");
-    assert_eq!(err.code, StatusCode::CryptoError);
-    assert!(
-        err.message.contains("Generation is too old"),
-        "unexpected crypto error message: {}",
-        err.message
-    );
-
-    assert!(
-        alice
-            .has_pending_commit(group_id.clone())
-            .expect("pending commit after invite")
-    );
-    alice
-        .clear_pending_commit(group_id.clone())
-        .expect("clear pending commit after invite");
-
-    assert!(
-        !alice
-            .has_pending_commit(group_id)
-            .expect("pending commit query after clear"),
-        "pending commit should be cleared"
-    );
+        .expect("application message should decrypt after merge");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, EventKind::MessageReceived);
+    assert_eq!(events[0].group_id.value, group_id.value);
+    assert_eq!(events[0].message_plaintext, b"hello bob".to_vec());
 }
 
 #[test]
@@ -115,12 +108,14 @@ fn self_update_sets_and_clears_pending_commit() {
         svc.has_pending_commit(group_id.clone())
             .expect("pending commit should be set")
     );
-    svc.clear_pending_commit(group_id.clone())
-        .expect("clear pending commit");
+    let merged = svc
+        .merge_pending_commit(group_id.clone())
+        .expect("merge pending commit");
+    assert_eq!(merged.epoch, 1);
     assert!(
         !svc.has_pending_commit(group_id)
             .expect("pending commit query"),
-        "pending commit should be cleared"
+        "pending commit should be cleared after merge"
     );
 }
 

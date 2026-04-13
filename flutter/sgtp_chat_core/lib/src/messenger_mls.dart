@@ -461,6 +461,23 @@ final class MessengerMls implements ffi.Finalizable {
   Future<Object?> hasPendingCommit(Object? value) =>
       Future<Object?>.microtask(() => hasPendingCommitSync(value));
 
+  /// Merge pending commit for JSON GroupId and return JSON GroupState.
+  Object? mergePendingCommitSync(Object? value) {
+    final data = Uint8List.fromList(utf8.encode(jsonEncode(value)));
+    final outBuf = calloc<MlsBuffer>();
+    try {
+      _throwIfError(
+        _callInputOut('messenger_mls_merge_pending_commit', data, outBuf),
+      );
+      return jsonDecode(_takeJson(outBuf.ref));
+    } finally {
+      calloc.free(outBuf);
+    }
+  }
+
+  Future<Object?> mergePendingCommit(Object? value) =>
+      Future<Object?>.microtask(() => mergePendingCommitSync(value));
+
   /// Clear pending commit for JSON GroupId.
   void clearPendingCommitSync(Object? value) {
     final data = Uint8List.fromList(utf8.encode(jsonEncode(value)));

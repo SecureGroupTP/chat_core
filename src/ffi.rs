@@ -515,6 +515,20 @@ pub extern "C" fn messenger_mls_has_pending_commit(
 }
 
 #[unsafe(no_mangle)]
+/// Завершает pending commit для JSON-кодированного [`GroupId`] и возвращает JSON состояния группы.
+pub extern "C" fn messenger_mls_merge_pending_commit(
+    handle: *mut MessengerMlsHandle,
+    input_ptr: *const u8,
+    input_len: usize,
+    out: *mut MlsBuffer,
+) -> u32 {
+    run_out(handle, out, |svc| {
+        let group_id: GroupId = parse_json(input_ptr, input_len)?;
+        svc.merge_pending_commit(group_id)
+    })
+}
+
+#[unsafe(no_mangle)]
 /// Очищает pending commit для JSON-кодированного [`GroupId`].
 pub extern "C" fn messenger_mls_clear_pending_commit(
     handle: *mut MessengerMlsHandle,

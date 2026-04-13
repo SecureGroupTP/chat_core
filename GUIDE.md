@@ -169,3 +169,24 @@ tar -xzf chat_core-sdk.tar.gz
 - Держать в проекте явную версию `chat_core`.
 - Обновлять через PR: bump тега + прогон интеграционных тестов Flutter.
 - Не скачивать и не подменять нативные бинарники "на лету" в рантайме.
+
+## 8. Важный MLS lifecycle: pending commit
+
+Если приложение вызывает MLS-операцию, которая локально создаёт commit, этого недостаточно для завершения перехода состояния у инициатора.
+
+Штатный flow:
+
+- `invite(...)` возвращает `commit_message` и `welcome_message`, но оставляет у инициатора `pending_commit`
+- `remove(...)` и `self_update(...)` тоже оставляют `pending_commit`
+- после того как нужные артефакты доставлены другим участникам, инициатор должен вызвать `merge_pending_commit(groupId)`
+
+Для сценария добавления участника последовательность должна быть такой:
+
+1. `alice.createGroup(...)`
+2. `alice.invite(...)`
+3. `bob.joinFromWelcome(...)`
+4. `alice.mergePendingCommit(...)`
+5. `alice.encryptMessage(...)`
+6. `bob.handleIncoming(...)`
+
+`clear_pending_commit(...)` не должен использоваться как штатная часть этого flow. Это recovery/debug API для аварийного сброса локального pending commit.

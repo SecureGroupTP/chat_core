@@ -73,6 +73,8 @@ pub trait MlsBackend: Send + Sync {
     fn handle_incoming(&mut self, message: &IncomingMessage) -> MlsResult<Option<Bytes>>;
     /// Возвращает, есть ли у backend несмерженный pending commit для группы.
     fn has_pending_commit(&self, group_id: &GroupId) -> MlsResult<bool>;
+    /// Завершает нормальный lifecycle pending commit через merge.
+    fn merge_pending_commit(&mut self, group_id: &GroupId) -> MlsResult<GroupSnapshot>;
     /// Очищает состояние pending commit в backend для группы.
     fn clear_pending_commit(&mut self, group_id: &GroupId) -> MlsResult<()>;
     /// Удаляет группу из runtime backend.
@@ -529,6 +531,20 @@ impl MlsBackend for OpenMlsBackend {
         Ok(self.group_ref(group_id)?.pending_commit().is_some())
     }
 
+    fn merge_pending_commit(&mut self, group_id: &GroupId) -> MlsResult<GroupSnapshot> {
+        Self::validate_group_id(group_id)?;
+        let key = to_group_key(&group_id.value);
+        let provider = &self.provider;
+        let group = self
+            .groups
+            .get_mut(&key)
+            .ok_or_else(|| Error::new(StatusCode::NotFound, "group not found"))?;
+        group
+            .merge_pending_commit(provider)
+            .map_err(|e| Self::map_err("merge pending commit", e))?;
+        Self::snapshot_for(group, provider)
+    }
+
     fn clear_pending_commit(&mut self, group_id: &GroupId) -> MlsResult<()> {
         Self::validate_group_id(group_id)?;
         let storage = self.provider.storage();
@@ -670,6 +686,7 @@ mod tests {
         };
         alice.create_group(&gid).expect("create group");
         let invite = alice.invite(&gid, &bob_kp).expect("invite");
+        alice.merge_pending_commit(&gid).expect("merge pending invite");
         let welcome = invite.welcome_message.expect("welcome bytes");
 
         let out = bob
@@ -700,14 +717,16 @@ mod tests {
         };
         alice.create_group(&gid).expect("create group");
         let invite = alice.invite(&gid, &kp).expect("invite");
+        alice.merge_pending_commit(&gid)
+            .expect("merge pending invite");
         bob.join_from_welcome(&invite.welcome_message.expect("welcome"))
             .expect("join");
 
         let remove_res = bob.remove(&gid, Some(0)).expect("bob removes alice");
         assert!(!remove_res.commit_message.is_empty());
 
-        bob.clear_pending_commit(&gid)
-            .expect("clear pending before self update");
+        bob.merge_pending_commit(&gid)
+            .expect("merge pending remove before self update");
         let update_res = bob.self_update(&gid).expect("bob self update");
         assert!(!update_res.commit_message.is_empty());
     }

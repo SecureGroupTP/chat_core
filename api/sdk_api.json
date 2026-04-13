@@ -122,6 +122,13 @@
       "doc": "Return JSON boolean pending-commit state for JSON GroupId."
     },
     {
+      "name": "merge_pending_commit",
+      "ffi_name": "messenger_mls_merge_pending_commit",
+      "input": "json",
+      "output": "json",
+      "doc": "Merge pending commit for JSON GroupId and return JSON GroupState."
+    },
+    {
       "name": "clear_pending_commit",
       "ffi_name": "messenger_mls_clear_pending_commit",
       "input": "json",

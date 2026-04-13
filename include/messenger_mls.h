@@ -56,6 +56,7 @@ uint32_t messenger_mls_encrypt_message(MessengerMlsHandle* handle, const uint8_t
 uint32_t messenger_mls_handle_incoming(MessengerMlsHandle* handle, const uint8_t* input_ptr, size_t input_len, MlsBuffer* out);
 
 uint32_t messenger_mls_has_pending_commit(MessengerMlsHandle* handle, const uint8_t* input_ptr, size_t input_len, MlsBuffer* out);
+uint32_t messenger_mls_merge_pending_commit(MessengerMlsHandle* handle, const uint8_t* input_ptr, size_t input_len, MlsBuffer* out);
 uint32_t messenger_mls_clear_pending_commit(MessengerMlsHandle* handle, const uint8_t* input_ptr, size_t input_len);
 uint32_t messenger_mls_drop_group(MessengerMlsHandle* handle, const uint8_t* input_ptr, size_t input_len);
 

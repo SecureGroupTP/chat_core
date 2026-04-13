@@ -5,8 +5,9 @@ use chat_core::ffi::{
     messenger_mls_free, messenger_mls_get_client_id, messenger_mls_get_group_state,
     messenger_mls_handle_incoming, messenger_mls_has_pending_commit, messenger_mls_invite,
     messenger_mls_join_from_welcome, messenger_mls_last_error, messenger_mls_list_groups,
-    messenger_mls_list_members, messenger_mls_mark_key_packages_uploaded, messenger_mls_new,
-    messenger_mls_remove, messenger_mls_restore_client, messenger_mls_self_update,
+    messenger_mls_list_members, messenger_mls_mark_key_packages_uploaded,
+    messenger_mls_merge_pending_commit, messenger_mls_new, messenger_mls_remove,
+    messenger_mls_restore_client, messenger_mls_self_update,
 };
 use chat_core::{
     ClientId, CreateClientParams, DeviceBinding, GroupId, GroupState, IncomingMessage,
@@ -230,10 +231,11 @@ fn ffi_end_to_end_core_operations() {
     assert_eq!(code_pending_before, StatusCode::Ok as u32);
     assert!(pending_before_opt.expect("pending before clear from invite"));
 
-    assert_eq!(
-        messenger_mls_clear_pending_commit(alice, group_json.as_ptr(), group_json.len()),
-        StatusCode::Ok as u32
-    );
+    let (code_merged, merged_opt): (u32, Option<GroupState>) = call_out_json(alice, |h, out| {
+        messenger_mls_merge_pending_commit(h, group_json.as_ptr(), group_json.len(), out)
+    });
+    assert_eq!(code_merged, StatusCode::Ok as u32);
+    assert_eq!(merged_opt.expect("merged state").epoch, 1);
 
     let (code_pending_cleared, pending_cleared_opt): (u32, Option<bool>) =
         call_out_json(alice, |h, out| {
@@ -248,6 +250,10 @@ fn ffi_end_to_end_core_operations() {
         });
     assert_eq!(code_update, StatusCode::Ok as u32);
     assert!(!update_opt.expect("self update").commit_message.is_empty());
+    assert_eq!(
+        messenger_mls_clear_pending_commit(alice, group_json.as_ptr(), group_json.len()),
+        StatusCode::Ok as u32
+    );
 
     // Encrypt path coverage.
     let encrypt_req = serde_json::json!({

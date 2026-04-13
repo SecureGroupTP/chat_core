@@ -133,8 +133,31 @@ Workflow GitHub Actions:
   - удаление участника через маппинг leaf-индекса
   - шифрование сообщения (MLS application message)
   - обработка входящих group message (включая merge staged commit)
-  - проверка/очистка pending commit и удаление группы
+  - проверка/merge/очистка pending commit и удаление группы
 - локальная persisted-модель для идентичности, снимков групп, инвентаря key package и очереди входящих
+
+## Lifecycle pending commit
+
+Для операций, которые создают локальный commit, текущий штатный flow такой:
+
+- `invite(...)` создаёт Add/Commit/Welcome и оставляет у инициатора `pending_commit = true`
+- `remove(...)` и `self_update(...)` тоже оставляют локальный `pending_commit = true`
+- после доставки commit/welcome и синхронизации участников инициатор должен вызвать `merge_pending_commit(group_id)`
+- только после этого состояние группы у инициатора считается нормально переведённым в новую epoch
+
+Важно:
+
+- `clear_pending_commit(group_id)` не является нормальным рабочим шагом протокола
+- `clear_pending_commit(...)` оставлен только как recovery/debug API для аварийного discard несмерженного commit
+
+Практический пример для add-member сценария:
+
+1. `alice.create_group()`
+2. `alice.invite(bob)`
+3. `bob.join_from_welcome(welcome)`
+4. `alice.merge_pending_commit(group_id)`
+5. `alice.encrypt_message(...)`
+6. `bob.handle_incoming(...)`
 
 ## Примечание по персистентности
 

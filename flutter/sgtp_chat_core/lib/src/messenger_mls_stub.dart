@@ -70,6 +70,9 @@ final class MessengerMls {
   Future<Object?> hasPendingCommit(Object? value) => _unsupported();
   Object? hasPendingCommitSync(Object? value) => _unsupportedSync();
 
+  Future<Object?> mergePendingCommit(Object? value) => _unsupported();
+  Object? mergePendingCommitSync(Object? value) => _unsupportedSync();
+
   Future<void> clearPendingCommit(Object? value) => _unsupported();
   void clearPendingCommitSync(Object? value) => _unsupportedSync();
 
