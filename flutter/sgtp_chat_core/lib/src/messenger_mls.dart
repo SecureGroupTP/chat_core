@@ -225,7 +225,8 @@ final class MessengerMls implements ffi.Finalizable {
   Future<void> createClient(Object? value) =>
       Future<void>.microtask(() => createClientSync(value));
 
-  /// Restore previously exported client state bytes.
+  /// Restore previously exported client state bytes, including persisted MLS
+  /// groups when the snapshot was produced by the default OpenMLS backend.
   void restoreClientSync(Uint8List data) {
     _throwIfError(_callInputVoid('messenger_mls_restore_client', data));
   }
@@ -233,7 +234,8 @@ final class MessengerMls implements ffi.Finalizable {
   Future<void> restoreClient(Uint8List data) =>
       Future<void>.microtask(() => restoreClientSync(data));
 
-  /// Export client state as opaque bytes for persistence.
+  /// Export opaque persistence bytes for the current client runtime, including
+  /// MLS group/provider state needed for a later restore.
   Uint8List exportClientStateSync() {
     final outBuf = calloc<MlsBuffer>();
     try {

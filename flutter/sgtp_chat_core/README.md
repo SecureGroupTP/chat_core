@@ -2,6 +2,10 @@
 
 Flutter package for `chat_core` FFI bindings.
 
+`export_client_state` / `restore_client` now roundtrip full client runtime for
+the default OpenMLS backend, including persisted MLS groups and the provider
+storage needed to continue normal encrypt/decrypt flows after app restart.
+
 The package bundles native libraries from GitHub Releases during Flutter native
 asset builds. Configure the release in the app `pubspec.yaml`:
 
