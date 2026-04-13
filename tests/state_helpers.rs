@@ -59,6 +59,7 @@ fn state_helpers_and_restore_paths() {
     g2.group_state.epoch = 99;
     let restored_dup = RuntimeState::restore(PersistedClientState {
         identity: None,
+        backend_snapshot: None,
         groups: vec![g1, g2],
         key_packages: Vec::new(),
         key_package_counter: 0,

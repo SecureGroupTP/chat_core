@@ -8,7 +8,7 @@ import 'package:hooks/hooks.dart';
 const _libraryBaseName = 'chat_core';
 const _defaultOwner = 'SecureGroupTP';
 const _defaultRepo = 'chat_core';
-const _defaultTag = 'v0.0.9';
+const _defaultTag = 'v0.0.10';
 
 void main(List<String> args) async {
   await build(args, (input, output) async {

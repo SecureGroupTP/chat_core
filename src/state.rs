@@ -8,6 +8,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+/// Сериализуемый backend-снимок, достаточный для восстановления крипто-состояния.
+pub enum BackendSnapshot {
+    /// Полный дамп `openmls_memory_storage::MemoryStorage`.
+    OpenMlsMemoryStorage {
+        /// Бинарный dump содержимого provider storage.
+        storage_dump: Bytes,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Persisted-запись идентичности, восстанавливаемая из [`CreateClientParams`].
 pub struct ClientIdentityState {
     /// Идентичность локального клиента.
@@ -105,6 +116,9 @@ impl GroupRuntimeState {
 pub struct PersistedClientState {
     /// Опциональная конфигурация идентичности клиента.
     pub identity: Option<ClientIdentityState>,
+    /// Опциональный дамп внутреннего backend storage.
+    #[serde(default)]
+    pub backend_snapshot: Option<BackendSnapshot>,
     /// Persisted-группы.
     pub groups: Vec<GroupRuntimeState>,
     /// Persisted-инвентарь key package.
@@ -118,6 +132,7 @@ impl PersistedClientState {
     pub fn empty() -> Self {
         Self {
             identity: None,
+            backend_snapshot: None,
             groups: Vec::new(),
             key_packages: Vec::new(),
             key_package_counter: 0,
@@ -135,6 +150,7 @@ impl PersistedClientState {
         });
         Self {
             identity: runtime.identity.clone(),
+            backend_snapshot: None,
             groups,
             key_packages: runtime.key_packages.clone(),
             key_package_counter: runtime.key_package_counter,

@@ -105,20 +105,13 @@ impl MessengerMls {
 
     /// Восстанавливает runtime-состояние из байтов, полученных через [`Self::export_client_state`].
     ///
-    /// Сейчас восстановление persisted-групп намеренно запрещено с
-    /// [`StatusCode::Unsupported`], чтобы избежать небезопасного частичного
-    /// восстановления OpenMLS.
+    /// Для полноценного восстановления OpenMLS-групп снимок должен содержать
+    /// сериализуемый backend dump. Старые снимки без него по-прежнему
+    /// восстанавливаются только если не содержат persisted-групп.
     /// Возвращает [`StatusCode::InvalidArgument`] для невалидного JSON payload.
     pub fn restore_client(&mut self, serialized_client_state: &[u8]) -> MlsResult<()> {
         let persisted: PersistedClientState = serde_json::from_slice(serialized_client_state)
             .map_err(|e| Error::new(StatusCode::InvalidArgument, format!("invalid state: {e}")))?;
-        if !persisted.groups.is_empty() {
-            return Err(Error::new(
-                StatusCode::Unsupported,
-                "restoring persisted groups is not supported by the current OpenMLS backend",
-            ));
-        }
-
         self.backend.reset();
         if let Some(identity) = persisted.identity.as_ref() {
             let params = CreateClientParams {
@@ -133,13 +126,33 @@ impl MessengerMls {
             };
             self.backend.configure_client(&params)?;
         }
+
+        match persisted.backend_snapshot.as_ref() {
+            Some(snapshot) => {
+                let group_ids: Vec<_> = persisted
+                    .groups
+                    .iter()
+                    .map(|group| group.group_state.group_id.clone())
+                    .collect();
+                self.backend.restore_backend_snapshot(snapshot, &group_ids)?;
+            }
+            None if !persisted.groups.is_empty() => {
+                return Err(Error::new(
+                    StatusCode::Unsupported,
+                    "restoring groups requires a backend snapshot in serialized_client_state",
+                ));
+            }
+            None => {}
+        }
+
         self.state = RuntimeState::restore(persisted);
         Ok(())
     }
 
     /// Сериализует текущее состояние клиента в JSON-blob.
     pub fn export_client_state(&self) -> MlsResult<Bytes> {
-        let persisted = PersistedClientState::from_runtime(&self.state);
+        let mut persisted = PersistedClientState::from_runtime(&self.state);
+        persisted.backend_snapshot = self.backend.export_backend_snapshot()?;
         serde_json::to_vec(&persisted)
             .map_err(|e| Error::new(StatusCode::StorageError, format!("serialize state: {e}")))
     }
@@ -846,6 +859,7 @@ mod tests {
         let mut service = MessengerMls::with_backend(Box::new(MockBackend::default()));
         let persisted = PersistedClientState {
             identity: None,
+            backend_snapshot: None,
             groups: vec![GroupRuntimeState::new(
                 GroupId {
                     value: b"group-a".to_vec(),
@@ -864,7 +878,7 @@ mod tests {
         let bytes = serde_json::to_vec(&persisted).unwrap();
         let err = service
             .restore_client(&bytes)
-            .expect_err("groups restore should be unsupported");
+            .expect_err("groups restore without backend snapshot should be unsupported");
         assert_eq!(err.code, StatusCode::Unsupported);
     }
 
@@ -877,6 +891,7 @@ mod tests {
 
         let persisted = PersistedClientState {
             identity: Some(ClientIdentityState::from(&make_params("alice", "phone"))),
+            backend_snapshot: None,
             groups: Vec::new(),
             key_packages: Vec::new(),
             key_package_counter: 0,

@@ -1,6 +1,6 @@
 use chat_core::{
     ClientId, CreateClientParams, DeviceBinding, EventKind, GroupId, IncomingMessage,
-    IncomingMessageKind, InviteRequest, MessengerMls, StatusCode,
+    IncomingMessageKind, InviteRequest, MessengerMls,
 };
 
 fn make_params(user: &str, device: &str, seed: u8) -> CreateClientParams {
@@ -141,20 +141,97 @@ fn export_restore_roundtrip_identity_and_key_packages() {
 }
 
 #[test]
-fn restore_with_groups_is_unsupported_in_real_backend() {
-    let mut svc = MessengerMls::new();
-    svc.create_client(make_params("alice", "tablet", 13))
-        .expect("create client");
-    svc.create_group(GroupId {
-        value: b"group-restore-unsupported".to_vec(),
-    })
-    .expect("create group");
+fn restore_with_groups_roundtrips_real_backend_state_and_flow() {
+    let mut alice = MessengerMls::new();
+    let mut bob = MessengerMls::new();
 
-    let snapshot = svc.export_client_state().expect("export state with group");
+    alice
+        .create_client(make_params("alice", "tablet", 13))
+        .expect("alice create client");
+    bob.create_client(make_params("bob", "tablet", 15))
+        .expect("bob create client");
 
-    let mut restored = MessengerMls::new();
-    let err = restored
+    let mut bob_key_packages = bob.create_key_packages(1).expect("bob key packages");
+    let bob_key_package = bob_key_packages.keypackages.remove(0);
+
+    let group_id = GroupId {
+        value: b"group-restore-real".to_vec(),
+    };
+    alice
+        .create_group(group_id.clone())
+        .expect("alice create group");
+
+    let invite = alice
+        .invite(InviteRequest {
+            group_id: group_id.clone(),
+            invited_client: bob.get_client_id().expect("bob client id"),
+            keypackage: bob_key_package,
+        })
+        .expect("invite bob");
+    bob.join_from_welcome(&invite.welcome_message)
+        .expect("bob join welcome");
+
+    let alice_state = alice
+        .merge_pending_commit(group_id.clone())
+        .expect("alice merge pending");
+    let bob_state_before_export = bob
+        .get_group_state(group_id.clone())
+        .expect("bob knows group before export");
+    assert_eq!(bob_state_before_export.epoch, alice_state.epoch);
+
+    let snapshot = bob.export_client_state().expect("export state with group");
+
+    let mut restored_bob = MessengerMls::new();
+    restored_bob
         .restore_client(&snapshot)
-        .expect_err("group restore must be unsupported currently");
-    assert_eq!(err.code, StatusCode::Unsupported);
+        .expect("restore group state");
+
+    let restored_groups = restored_bob.list_groups().expect("restored groups");
+    assert_eq!(restored_groups.len(), 1);
+    assert_eq!(restored_groups[0].group_id.value, group_id.value.clone());
+
+    let restored_state = restored_bob
+        .get_group_state(group_id.clone())
+        .expect("restored group state");
+    assert_eq!(restored_state.epoch, bob_state_before_export.epoch);
+
+    let ciphertext_from_alice = alice
+        .encrypt_message(
+            group_id.clone(),
+            b"message after restore".to_vec(),
+            b"aad-restore-1".to_vec(),
+        )
+        .expect("alice encrypt after restore");
+    let restored_events = restored_bob
+        .handle_incoming(IncomingMessage {
+            kind: IncomingMessageKind::GroupMessage,
+            payload: ciphertext_from_alice,
+        })
+        .expect("restored bob decrypts alice message");
+    assert_eq!(restored_events.len(), 1);
+    assert_eq!(restored_events[0].kind, EventKind::MessageReceived);
+    assert_eq!(
+        restored_events[0].message_plaintext,
+        b"message after restore".to_vec()
+    );
+
+    let ciphertext_from_restored_bob = restored_bob
+        .encrypt_message(
+            group_id.clone(),
+            b"reply from restored bob".to_vec(),
+            b"aad-restore-2".to_vec(),
+        )
+        .expect("restored bob encrypt");
+    let alice_events = alice
+        .handle_incoming(IncomingMessage {
+            kind: IncomingMessageKind::GroupMessage,
+            payload: ciphertext_from_restored_bob,
+        })
+        .expect("alice decrypts restored bob message");
+    assert_eq!(alice_events.len(), 1);
+    assert_eq!(alice_events[0].kind, EventKind::MessageReceived);
+    assert_eq!(
+        alice_events[0].message_plaintext,
+        b"reply from restored bob".to_vec()
+    );
 }

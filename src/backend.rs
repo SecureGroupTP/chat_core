@@ -3,7 +3,7 @@
 //! Сервисный слой использует [`crate::backend::MlsBackend`], чтобы бизнес-логика
 //! была независима от конкретной MLS-реализации.
 
-use crate::state::to_group_key;
+use crate::state::{BackendSnapshot, to_group_key};
 use crate::types::{
     Bytes, CreateClientParams, Error, GroupId, IncomingMessage, IncomingMessageKind, MlsResult,
     StatusCode,
@@ -79,6 +79,21 @@ pub trait MlsBackend: Send + Sync {
     fn clear_pending_commit(&mut self, group_id: &GroupId) -> MlsResult<()>;
     /// Удаляет группу из runtime backend.
     fn drop_group(&mut self, group_id: &GroupId) -> MlsResult<()>;
+    /// Экспортирует backend-состояние, достаточное для последующего восстановления.
+    fn export_backend_snapshot(&self) -> MlsResult<Option<BackendSnapshot>> {
+        Ok(None)
+    }
+    /// Восстанавливает backend-состояние из ранее экспортированного снимка.
+    fn restore_backend_snapshot(
+        &mut self,
+        _snapshot: &BackendSnapshot,
+        _group_ids: &[GroupId],
+    ) -> MlsResult<()> {
+        Err(Error::new(
+            StatusCode::Unsupported,
+            "backend snapshot restore is not supported",
+        ))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -188,6 +203,63 @@ impl OpenMlsBackend {
     /// Приводит низкоуровневые crypto-ошибки к единому формату сервисных ошибок.
     fn map_err<E: core::fmt::Display>(context: &str, err: E) -> Error {
         Error::new(StatusCode::CryptoError, format!("{context}: {err}"))
+    }
+
+    /// Сериализует `MemoryStorage` в компактный бинарный dump.
+    fn encode_storage(&self) -> Bytes {
+        let values = self.provider.storage().values.read().unwrap();
+        let mut out = Vec::new();
+        out.extend_from_slice(&(values.len() as u64).to_be_bytes());
+        for (key, value) in values.iter() {
+            out.extend_from_slice(&(key.len() as u64).to_be_bytes());
+            out.extend_from_slice(&(value.len() as u64).to_be_bytes());
+            out.extend_from_slice(key);
+            out.extend_from_slice(value);
+        }
+        out
+    }
+
+    /// Десериализует бинарный dump обратно в `MemoryStorage`.
+    fn decode_storage(&mut self, dump: &[u8]) -> MlsResult<()> {
+        let mut cursor = 0usize;
+        let read_u64 = |dump: &[u8], cursor: &mut usize| -> MlsResult<u64> {
+            let end = cursor.saturating_add(8);
+            let bytes = dump.get(*cursor..end).ok_or_else(|| {
+                Error::new(StatusCode::InvalidArgument, "invalid backend snapshot storage dump")
+            })?;
+            let mut buf = [0u8; 8];
+            buf.copy_from_slice(bytes);
+            *cursor = end;
+            Ok(u64::from_be_bytes(buf))
+        };
+        let read_bytes = |dump: &[u8], cursor: &mut usize, len: usize| -> MlsResult<Vec<u8>> {
+            let end = cursor.saturating_add(len);
+            let bytes = dump.get(*cursor..end).ok_or_else(|| {
+                Error::new(StatusCode::InvalidArgument, "invalid backend snapshot storage dump")
+            })?;
+            *cursor = end;
+            Ok(bytes.to_vec())
+        };
+
+        let count = read_u64(dump, &mut cursor)? as usize;
+        let mut restored = HashMap::with_capacity(count);
+        for _ in 0..count {
+            let key_len = read_u64(dump, &mut cursor)? as usize;
+            let value_len = read_u64(dump, &mut cursor)? as usize;
+            let key = read_bytes(dump, &mut cursor, key_len)?;
+            let value = read_bytes(dump, &mut cursor, value_len)?;
+            restored.insert(key, value);
+        }
+        if cursor != dump.len() {
+            return Err(Error::new(
+                StatusCode::InvalidArgument,
+                "invalid backend snapshot storage dump",
+            ));
+        }
+
+        let mut values = self.provider.storage().values.write().unwrap();
+        *values = restored;
+        Ok(())
     }
 }
 
@@ -564,6 +636,42 @@ impl MlsBackend for OpenMlsBackend {
         if self.groups.remove(&key).is_none() {
             return Err(Error::new(StatusCode::NotFound, "group not found"));
         }
+        Ok(())
+    }
+
+    fn export_backend_snapshot(&self) -> MlsResult<Option<BackendSnapshot>> {
+        Ok(Some(BackendSnapshot::OpenMlsMemoryStorage {
+            storage_dump: self.encode_storage(),
+        }))
+    }
+
+    fn restore_backend_snapshot(
+        &mut self,
+        snapshot: &BackendSnapshot,
+        group_ids: &[GroupId],
+    ) -> MlsResult<()> {
+        let storage_dump = match snapshot {
+            BackendSnapshot::OpenMlsMemoryStorage { storage_dump } => storage_dump,
+        };
+        self.decode_storage(storage_dump)?;
+        self.groups.clear();
+
+        for group_id in group_ids {
+            Self::validate_group_id(group_id)?;
+            let loaded = MlsGroup::load(
+                self.provider.storage(),
+                &OpenMlsGroupId::from_slice(&group_id.value),
+            )
+            .map_err(|e| Self::map_err("load group from storage", e))?
+            .ok_or_else(|| {
+                Error::new(
+                    StatusCode::InvalidState,
+                    "group is missing from backend snapshot storage",
+                )
+            })?;
+            self.groups.insert(to_group_key(&group_id.value), loaded);
+        }
+
         Ok(())
     }
 }
