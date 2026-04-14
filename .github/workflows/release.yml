@@ -21,7 +21,7 @@ jobs:
           - os: ubuntu-latest
             artifact_name: chat_core-linux-amd64.so
             source_path: target/release/libchat_core.so
-          - os: macos-13
+          - os: macos-latest
             artifact_name: chat_core-macos-amd64.dylib
             source_path: target/release/libchat_core.dylib
     runs-on: ${{ matrix.os }}
@@ -53,6 +53,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
       - name: Setup stable Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -68,6 +73,10 @@ jobs:
 
       - name: Install flutter_rust_bridge_codegen
         run: cargo install flutter_rust_bridge_codegen --version 2.12.0
+
+      - name: Resolve Dart and Flutter dependencies
+        working-directory: flutter/sgtp_chat_core
+        run: flutter pub get
 
       - name: Build web package
         run: |
@@ -131,3 +140,5 @@ jobs:
           publish_dir: ./web-pkg
           destination_dir: releases/latest/pkg
           keep_files: true
+
+
