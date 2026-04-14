@@ -571,6 +571,7 @@ fn render_go(spec: &ApiSpec) -> String {
     out.push_str("/*\n");
     out.push_str("#cgo CFLAGS: -I../../include\n");
     out.push_str("#cgo LDFLAGS: -L../../target/release -l:libchat_core.a\n");
+    out.push_str("#cgo linux LDFLAGS: -lm\n");
     out.push_str("#include <stdlib.h>\n");
     out.push_str(&format!("#include \"{}\"\n", spec.ffi_header));
     out.push_str("*/\n");
@@ -1392,3 +1393,5 @@ pub extern "C" fn messenger_mls_def(x: i32) -> u32 { 0 }
         assert!(render_dart_pubspec().contains("messenger_mls_generated"));
     }
 }
+
+

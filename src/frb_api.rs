@@ -1,3 +1,6 @@
+#![allow(missing_docs)]
+#![allow(unexpected_cfgs)]
+
 use crate::service::MessengerMls;
 use crate::types::{
     Bytes, CreateClientParams, Error, GroupId, IncomingMessage, InviteRequest, KeyPackageBundle,

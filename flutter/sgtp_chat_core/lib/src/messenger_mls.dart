@@ -4,6 +4,8 @@ import 'dart:typed_data';
 
 import 'rust/frb_api.dart';
 import 'rust/frb_generated.dart';
+import 'rust_external_library_stub.dart'
+    if (dart.library.js_interop) 'rust_external_library_web.dart';
 
 final class MlsException implements Exception {
   MlsException(this.code, this.message);
@@ -28,7 +30,10 @@ final class MessengerMls {
     if (existing != null) {
       return existing;
     }
-    final future = ChatCoreBridge.init();
+    final future = () async {
+      final externalLibrary = await createChatCoreWebExternalLibrary();
+      await ChatCoreBridge.init(externalLibrary: externalLibrary);
+    }();
     _initFuture = future;
     return future;
   }
@@ -244,3 +249,4 @@ final class MessengerMls {
   Future<void> dropGroup(Object? value) =>
       Future<void>.microtask(() => dropGroupSync(value));
 }
+

@@ -1,0 +1,133 @@
+name: Release Chat Core
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: chat_core-windows-msvc-amd64.dll
+            source_path: target/release/chat_core.dll
+          - os: ubuntu-latest
+            artifact_name: chat_core-linux-amd64.so
+            source_path: target/release/libchat_core.so
+          - os: macos-13
+            artifact_name: chat_core-macos-amd64.dylib
+            source_path: target/release/libchat_core.dylib
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build native library
+        run: cargo build --release --lib
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "${{ matrix.source_path }}" "dist/${{ matrix.artifact_name }}"
+
+      - name: Upload native artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/${{ matrix.artifact_name }}
+
+  build-web:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Setup nightly rust-src
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack
+
+      - name: Install flutter_rust_bridge_codegen
+        run: cargo install flutter_rust_bridge_codegen --version 2.12.0
+
+      - name: Build web package
+        run: |
+          flutter_rust_bridge_codegen build-web \
+            --dart-root flutter/sgtp_chat_core \
+            --rust-root . \
+            --output dist/web \
+            --release
+
+      - name: Upload web bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat_core-web-pkg
+          path: dist/web/pkg
+
+  publish-release:
+    needs: [build-native, build-web]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect release files
+        run: |
+          mkdir -p release
+          find artifacts -maxdepth 3 -type f -print -exec cp {} release/ \;
+          tar -C artifacts/chat_core-web-pkg -czf release/chat_core-web-pkg.tar.gz .
+
+      - name: Publish GitHub release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+
+  publish-web:
+    needs: build-web
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: chat_core-web-pkg
+          path: web-pkg
+
+      - name: Publish versioned web bundle
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./web-pkg
+          destination_dir: releases/${{ github.ref_name }}/pkg
+          keep_files: true
+
+      - name: Publish latest web bundle
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./web-pkg
+          destination_dir: releases/latest/pkg
+          keep_files: true
