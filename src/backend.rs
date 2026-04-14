@@ -206,8 +206,13 @@ impl OpenMlsBackend {
     }
 
     /// Сериализует `MemoryStorage` в компактный бинарный dump.
-    fn encode_storage(&self) -> Bytes {
-        let values = self.provider.storage().values.read().unwrap();
+    fn encode_storage(&self) -> MlsResult<Bytes> {
+        let values = self.provider.storage().values.read().map_err(|_| {
+            Error::new(
+                StatusCode::InternalError,
+                "backend storage read lock is poisoned",
+            )
+        })?;
         let mut out = Vec::new();
         out.extend_from_slice(&(values.len() as u64).to_be_bytes());
         for (key, value) in values.iter() {
@@ -216,7 +221,7 @@ impl OpenMlsBackend {
             out.extend_from_slice(key);
             out.extend_from_slice(value);
         }
-        out
+        Ok(out)
     }
 
     /// Десериализует бинарный dump обратно в `MemoryStorage`.
@@ -257,7 +262,12 @@ impl OpenMlsBackend {
             ));
         }
 
-        let mut values = self.provider.storage().values.write().unwrap();
+        let mut values = self.provider.storage().values.write().map_err(|_| {
+            Error::new(
+                StatusCode::InternalError,
+                "backend storage write lock is poisoned",
+            )
+        })?;
         *values = restored;
         Ok(())
     }
@@ -641,7 +651,7 @@ impl MlsBackend for OpenMlsBackend {
 
     fn export_backend_snapshot(&self) -> MlsResult<Option<BackendSnapshot>> {
         Ok(Some(BackendSnapshot::OpenMlsMemoryStorage {
-            storage_dump: self.encode_storage(),
+            storage_dump: self.encode_storage()?,
         }))
     }
 

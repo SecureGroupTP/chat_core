@@ -22,3 +22,5 @@ target
 
 # Generated SDK artifacts
 tmp
+
+.dart_tool/

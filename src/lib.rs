@@ -8,10 +8,14 @@
 
 #![warn(missing_docs)]
 
+mod frb_generated; /* AUTO INJECTED BY flutter_rust_bridge. This line may not be accurate, and you can change it according to your needs. */
+
 /// Абстракции OpenMLS backend и реализация по умолчанию.
 pub mod backend;
 /// C ABI фасад поверх [`MessengerMls`].
 pub mod ffi;
+/// flutter_rust_bridge facade for Dart and Flutter integration.
+pub mod frb_api;
 /// Высокоуровневый сервисный API для жизненного цикла MLS-клиента и работы с группами.
 pub mod service;
 /// Модели состояния в памяти и в сериализованном виде для сервисного слоя.

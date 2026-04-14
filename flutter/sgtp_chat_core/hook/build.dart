@@ -16,22 +16,32 @@ void main(List<String> args) async {
 
     final target = _Target.from(input.config.code);
     final defines = _Defines(input);
-    final release = await _Release.fetch(
-      owner: defines.githubOwner,
-      repo: defines.githubRepo,
-      tag: defines.releaseTag,
-    );
 
-    final choice =
-        target.chooseAsset(release, allowStatic: defines.allowStaticLinking) ??
-        await target.tryBuildLocalDynamic(input);
+    final localChoice = defines.preferLocalBuild
+        ? await target.tryBuildLocalDynamic(input)
+        : null;
+    final release = localChoice == null
+        ? await _Release.fetch(
+            owner: defines.githubOwner,
+            repo: defines.githubRepo,
+            tag: defines.releaseTag,
+          )
+        : null;
+    final releaseChoice = release?.chooseAsset(
+      target,
+      allowStatic: defines.allowStaticLinking,
+    );
+    final fallbackLocalChoice = localChoice == null && !defines.preferLocalBuild
+        ? await target.tryBuildLocalDynamic(input)
+        : null;
+
+    final choice = localChoice ?? releaseChoice ?? fallbackLocalChoice;
     if (choice == null) {
       throw UnsupportedError(
-        'No chat_core native asset for ${target.os.name}/${target.arch.name} '
-        'in ${defines.githubOwner}/${defines.githubRepo} ${defines.releaseTag}. '
-        'Create a release with dynamic libraries, or build from a local '
-        'chat_core checkout with cargo available. '
-        'Available assets: ${release.assetNames.join(', ')}',
+        'No compatible chat_core native asset was found. '
+        'Create a release with dynamic libraries, or enable '
+        'hooks.user_defines.sgtp_chat_core.prefer_local_build with a local '
+        'chat_core checkout and cargo available.',
       );
     }
 
@@ -62,12 +72,14 @@ final class _Defines {
       githubOwner = _readString(input, 'github_owner', _defaultOwner),
       githubRepo = _readString(input, 'github_repo', _defaultRepo),
       allowStaticLinking = _readBool(input, 'allow_static_linking', false),
+      preferLocalBuild = _readBool(input, 'prefer_local_build', false),
       checksums = _readChecksums(input);
 
   final String releaseTag;
   final String githubOwner;
   final String githubRepo;
   final bool allowStaticLinking;
+  final bool preferLocalBuild;
   final Map<String, String> checksums;
 
   static String _readString(BuildInput input, String key, String fallback) {
@@ -320,6 +332,9 @@ final class _Release {
   final Map<String, _ReleaseAsset> assets;
 
   Iterable<String> get assetNames => assets.keys;
+
+  _AssetChoice? chooseAsset(_Target target, {required bool allowStatic}) =>
+      target.chooseAsset(this, allowStatic: allowStatic);
 
   static Future<_Release> fetch({
     required String owner,
